@@ -1,5 +1,14 @@
-# persona-harness Skill
+# persona-harness skill
 
-Use this repository for harness identity, lifecycle, transcripts, and adapter
-contracts. Keep routing decisions in `persona-router` and OS/window events in
-`persona-system`.
+Work here when the change concerns harness identity, lifecycle, transcript
+events, adapter capabilities, or harness actor surfaces.
+
+Rules for work here:
+
+- Keep routing policy in `persona-router`.
+- Keep OS/window-manager observations in `persona-system`.
+- Keep durable PTY and WezTerm viewer transport in `persona-wezterm`.
+- Model harness capabilities as typed values, not strings.
+- Preserve the durable-harness invariant: closing a viewer must not kill the
+  harness.
+
