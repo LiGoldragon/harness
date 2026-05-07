@@ -1,0 +1,18 @@
+[package]
+name         = "persona-harness"
+version      = "0.1.0"
+edition      = "2024"
+rust-version = "1.85"
+license      = "MIT OR Apache-2.0"
+repository   = "https://github.com/LiGoldragon/persona-harness"
+description  = "Interactive harness abstraction for Persona."
+publish      = false
+
+[lib]
+name = "persona_harness"
+path = "src/lib.rs"
+
+[lints.rust]
+unsafe_code = "forbid"
+unused = "warn"
+dead_code = "warn"
