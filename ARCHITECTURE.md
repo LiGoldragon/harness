@@ -53,7 +53,7 @@ This repo does not own:
 - routing decisions (`persona-router`);
 - OS/window focus backend (`persona-system`);
 - PTY and WezTerm byte transport (`persona-wezterm`);
-- shared signal definitions (`persona-signal`);
+- shared signal definitions (`signal-persona`);
 - database write ownership (`persona-store`).
 
 ## 4 · Invariants
