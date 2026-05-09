@@ -19,7 +19,7 @@ flowchart LR
     "HarnessActor" -->|"adapter command"| "HarnessAdapter"
     "HarnessAdapter" -->|"terminal transport"| "persona-wezterm"
     "HarnessActor" -->|"transcript event"| "persona-router"
-    "HarnessActor" -->|"state commit"| "persona-store"
+    "HarnessActor" -->|"harness-owned state"| "persona-sema"
 ```
 
 ## 1 · Component Surface
@@ -36,8 +36,8 @@ flowchart LR
 ## 2 · State and Ownership
 
 The harness component owns live harness identity and lifecycle state. Transcript
-and lifecycle events are typed observations; durable history is committed
-through `persona-store` in the assembled runtime.
+and lifecycle events are typed observations; durable harness history uses
+`persona-sema` as a library when the harness actor persists its own state.
 
 ## 3 · Boundaries
 
@@ -53,8 +53,9 @@ This repo does not own:
 - routing decisions (`persona-router`);
 - OS/window focus backend (`persona-system`);
 - PTY and WezTerm byte transport (`persona-wezterm`);
-- shared signal definitions (`signal-persona`);
-- database write ownership (`persona-store`).
+- harness wire contract definitions (`signal-persona-harness`);
+- umbrella Persona record definitions (`signal-persona`);
+- database write ownership for other components (`persona-sema` users).
 
 ## 4 · Invariants
 
@@ -76,4 +77,5 @@ tests/             harness smoke tests
 - `../persona-router/ARCHITECTURE.md`
 - `../persona-system/ARCHITECTURE.md`
 - `../persona-wezterm/ARCHITECTURE.md`
-- `../persona-store/ARCHITECTURE.md`
+- `../persona-sema/ARCHITECTURE.md`
+- `../signal-persona-harness/ARCHITECTURE.md`
