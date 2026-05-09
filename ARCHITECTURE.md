@@ -35,9 +35,14 @@ flowchart LR
 
 ## 2 · State and Ownership
 
-The harness component owns live harness identity and lifecycle state. Transcript
-and lifecycle events are typed observations; durable harness history uses
-`persona-sema` as a library when the harness actor persists its own state.
+The harness component owns live harness identity and lifecycle state.
+Transcript and lifecycle events are typed observations.
+
+When durable harness history is needed, the harness actor opens its **own**
+redb file (e.g. `harness.redb`) through `persona-sema`, which uses the
+workspace's `sema` database library underneath. The harness actor sequences
+its own writes; no shared cross-component database. Per
+`~/primary/reports/designer/92-sema-as-database-library-architecture-revamp.md`.
 
 ## 3 · Boundaries
 
