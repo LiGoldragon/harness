@@ -4,7 +4,9 @@
 
 `persona-harness` models interactive AI harnesses as addressable runtime
 objects. Codex, Claude, Pi, and later harnesses become typed records with
-lifecycle state, transcript streams, and delivery capabilities.
+lifecycle state, transcript streams, and delivery capabilities. The
+Persona-facing terminal contract is `signal-persona-terminal`; current terminal
+transport execution is delegated to `persona-wezterm`.
 
 ---
 
@@ -30,6 +32,7 @@ flowchart LR
 - lifecycle state;
 - transcript events;
 - adapter capability records;
+- terminal delivery adapter records;
 - a Kameo harness actor surface for the assembled runtime;
 - test fixtures for fake harnesses.
 
@@ -54,6 +57,7 @@ This repo owns:
 - harness actor lifecycle;
 - transcript event shape;
 - adapter contracts.
+- harness-owned terminal delivery adaptation.
 
 This repo does not own:
 
@@ -61,6 +65,7 @@ This repo does not own:
 - OS/window focus backend (`persona-system`);
 - PTY and WezTerm byte transport (`persona-wezterm`);
 - harness wire contract definitions (`signal-persona-harness`);
+- terminal wire contract definitions (`signal-persona-terminal`);
 - umbrella Persona record definitions (`signal-persona`);
 - database write ownership for other components (`persona-sema` users).
 
@@ -77,6 +82,7 @@ This repo does not own:
 ```text
 src/harness.rs    harness identity records
 src/runtime.rs    Kameo lifecycle and transcript state owner
+src/terminal.rs   terminal delivery adapter records
 src/transcript.rs transcript event records
 tests/               harness smoke and actor-runtime constraint tests
 ```
