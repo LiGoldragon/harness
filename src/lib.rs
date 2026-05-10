@@ -1,7 +1,9 @@
 pub mod harness;
-pub mod harness_actor;
+pub mod runtime;
 pub mod transcript;
 
 pub use harness::{HarnessBinding, HarnessId, HarnessKind};
-pub use harness_actor::{HarnessActor, HarnessActorHandle, HarnessLifecycle, HarnessState};
+pub use runtime::{
+    Harness, HarnessLifecycle, HarnessState, ReadState, RecordTranscriptLine, SetHarnessLifecycle,
+};
 pub use transcript::{TranscriptEvent, TranscriptLine};

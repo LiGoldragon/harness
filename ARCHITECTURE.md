@@ -15,11 +15,11 @@ OS-specific focus observation, or WezTerm's durable PTY transport.
 
 ```mermaid
 flowchart LR
-    "persona-router" -->|"delivery request"| "HarnessActor"
-    "HarnessActor" -->|"adapter command"| "HarnessAdapter"
+    "persona-router" -->|"delivery request"| "Harness"
+    "Harness" -->|"adapter command"| "HarnessAdapter"
     "HarnessAdapter" -->|"terminal transport"| "persona-wezterm"
-    "HarnessActor" -->|"transcript event"| "persona-router"
-    "HarnessActor" -->|"harness-owned state"| "persona-sema"
+    "Harness" -->|"transcript event"| "persona-router"
+    "Harness" -->|"harness-owned state"| "persona-sema"
 ```
 
 ## 1 · Component Surface
@@ -36,7 +36,7 @@ flowchart LR
 ## 2 · State and Ownership
 
 The harness component owns live harness identity and lifecycle state.
-Transcript and lifecycle events are typed observations. `HarnessActor` is the
+Transcript and lifecycle events are typed observations. `Harness` is the
 mailbox-backed owner for one live harness binding, its lifecycle state, and its
 transcript event count.
 
@@ -75,9 +75,9 @@ This repo does not own:
 ## Code Map
 
 ```text
-src/harness.rs       harness identity records
-src/harness_actor.rs Kameo lifecycle and transcript state owner
-src/transcript.rs    transcript event records
+src/harness.rs    harness identity records
+src/runtime.rs    Kameo lifecycle and transcript state owner
+src/transcript.rs transcript event records
 tests/               harness smoke and actor-runtime constraint tests
 ```
 

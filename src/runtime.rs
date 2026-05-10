@@ -20,19 +20,25 @@ pub struct HarnessState {
 }
 
 #[derive(Debug)]
-pub struct HarnessActor {
+pub struct Harness {
     binding: HarnessBinding,
     lifecycle: HarnessLifecycle,
     transcript_event_count: u64,
 }
 
-impl HarnessActor {
+impl Harness {
     pub fn new(binding: HarnessBinding) -> Self {
         Self {
             binding,
             lifecycle: HarnessLifecycle::Starting,
             transcript_event_count: 0,
         }
+    }
+
+    pub async fn start(binding: HarnessBinding) -> ActorRef<Self> {
+        let reference = Self::spawn(binding);
+        reference.wait_for_startup().await;
+        reference
     }
 
     fn state(&self) -> HarnessState {
@@ -44,50 +50,18 @@ impl HarnessActor {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct HarnessActorHandle {
-    actor_reference: ActorRef<HarnessActor>,
-}
-
-impl HarnessActorHandle {
-    pub async fn start(binding: HarnessBinding) -> Self {
-        let actor_reference = HarnessActor::spawn(binding);
-        actor_reference.wait_for_startup().await;
-        Self { actor_reference }
-    }
-
-    pub async fn read_state(&self) -> HarnessState {
-        self.actor_reference
-            .ask(ReadHarnessState)
-            .await
-            .expect("harness actor mailbox accepts state reads")
-    }
-
-    pub async fn set_lifecycle(&self, lifecycle: HarnessLifecycle) -> HarnessState {
-        self.actor_reference
-            .ask(SetHarnessLifecycle { lifecycle })
-            .await
-            .expect("harness actor mailbox accepts lifecycle writes")
-    }
-
-    pub async fn record_transcript(&self, line: TranscriptLine) -> TranscriptEvent {
-        self.actor_reference
-            .ask(RecordTranscriptLine { line })
-            .await
-            .expect("harness actor mailbox accepts transcript writes")
-    }
-
-    pub async fn stop(self) {
-        self.actor_reference
-            .stop_gracefully()
-            .await
-            .expect("harness actor stops gracefully");
-        self.actor_reference.wait_for_shutdown().await;
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReadHarnessState;
+pub struct ReadState {
+    pub minimum_transcript_events: u64,
+}
+
+impl ReadState {
+    pub fn expecting_at_least(minimum_transcript_events: u64) -> Self {
+        Self {
+            minimum_transcript_events,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SetHarnessLifecycle {
@@ -99,7 +73,7 @@ pub struct RecordTranscriptLine {
     pub line: TranscriptLine,
 }
 
-impl Actor for HarnessActor {
+impl Actor for Harness {
     type Args = HarnessBinding;
     type Error = Infallible;
 
@@ -111,19 +85,20 @@ impl Actor for HarnessActor {
     }
 }
 
-impl Message<ReadHarnessState> for HarnessActor {
+impl Message<ReadState> for Harness {
     type Reply = HarnessState;
 
     async fn handle(
         &mut self,
-        _message: ReadHarnessState,
+        message: ReadState,
         _context: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
+        let _satisfied = self.transcript_event_count >= message.minimum_transcript_events;
         self.state()
     }
 }
 
-impl Message<SetHarnessLifecycle> for HarnessActor {
+impl Message<SetHarnessLifecycle> for Harness {
     type Reply = HarnessState;
 
     async fn handle(
@@ -136,7 +111,7 @@ impl Message<SetHarnessLifecycle> for HarnessActor {
     }
 }
 
-impl Message<RecordTranscriptLine> for HarnessActor {
+impl Message<RecordTranscriptLine> for Harness {
     type Reply = TranscriptEvent;
 
     async fn handle(

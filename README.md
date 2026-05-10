@@ -5,5 +5,5 @@ Typed harness abstraction for Persona.
 This crate holds the reusable model for Codex, Claude, Pi, and other
 interactive harnesses: identity, lifecycle, transcript events, and adapter
 capabilities. Live harness lifecycle and transcript counters are owned by a
-Kameo `HarnessActor` so assembled runtimes can push state changes through a
+Kameo `Harness` so assembled runtimes can push state changes through a
 mailbox instead of sharing loose mutable objects.

@@ -2,7 +2,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use persona_harness::{
-    HarnessActorHandle, HarnessBinding, HarnessId, HarnessKind, HarnessLifecycle, TranscriptLine,
+    Harness, HarnessBinding, HarnessId, HarnessKind, HarnessLifecycle, ReadState,
+    RecordTranscriptLine, SetHarnessLifecycle, TranscriptLine,
 };
 
 struct SourceFile {
@@ -96,42 +97,62 @@ fn harness_actor_cannot_use_non_kameo_runtime() {
 }
 
 #[test]
-fn harness_actor_cannot_be_empty_marker() {
+fn harness_runtime_cannot_be_empty_marker() {
     let source = SourceFile::read(
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("src")
-            .join("harness_actor.rs"),
+            .join("runtime.rs"),
     );
 
-    assert!(source.contains("pub struct HarnessActor {"));
+    assert!(source.contains("pub struct Harness {"));
     assert!(source.contains("binding: HarnessBinding,"));
     assert!(source.contains("lifecycle: HarnessLifecycle,"));
     assert!(source.contains("transcript_event_count: u64,"));
+    assert!(source.contains("pub struct ReadState {"));
+    assert!(source.contains("minimum_transcript_events: u64,"));
 }
 
 #[tokio::test]
-async fn harness_actor_cannot_forget_lifecycle_between_messages() {
-    let actor = HarnessActorHandle::start(binding()).await;
+async fn harness_runtime_cannot_forget_lifecycle_between_messages() {
+    let harness = Harness::start(binding()).await;
 
-    actor.set_lifecycle(HarnessLifecycle::Running).await;
-    let state = actor.read_state().await;
+    harness
+        .ask(SetHarnessLifecycle {
+            lifecycle: HarnessLifecycle::Running,
+        })
+        .await
+        .expect("harness mailbox accepts lifecycle writes");
+    let state = harness
+        .ask(ReadState::expecting_at_least(0))
+        .await
+        .expect("harness mailbox accepts state reads");
 
     assert_eq!(state.lifecycle, HarnessLifecycle::Running);
     assert_eq!(state.binding.id().as_str(), "operator");
-    actor.stop().await;
+    harness.stop_gracefully().await.expect("harness stops");
+    harness.wait_for_shutdown().await;
 }
 
 #[tokio::test]
-async fn harness_actor_cannot_emit_transcript_for_another_harness() {
-    let actor = HarnessActorHandle::start(binding()).await;
+async fn harness_runtime_cannot_emit_transcript_for_another_harness() {
+    let harness = Harness::start(binding()).await;
 
-    let event = actor.record_transcript(TranscriptLine::new("ready")).await;
-    let state = actor.read_state().await;
+    let event = harness
+        .ask(RecordTranscriptLine {
+            line: TranscriptLine::new("ready"),
+        })
+        .await
+        .expect("harness mailbox accepts transcript writes");
+    let state = harness
+        .ask(ReadState::expecting_at_least(1))
+        .await
+        .expect("harness mailbox accepts state reads");
 
     assert_eq!(event.harness().as_str(), "operator");
     assert_eq!(event.line().as_str(), "ready");
     assert_eq!(state.transcript_event_count, 1);
-    actor.stop().await;
+    harness.stop_gracefully().await.expect("harness stops");
+    harness.wait_for_shutdown().await;
 }
 
 fn binding() -> HarnessBinding {
