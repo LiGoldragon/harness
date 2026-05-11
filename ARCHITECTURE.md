@@ -53,6 +53,10 @@ Harness identity views are connection-class aware. `Owner` and
 `NonOwnerUser` connections receive redacted views by default. `OtherPersona`
 connections see harness identity only through an explicit `EngineRoute`
 projection; no incidental identity leak is acceptable.
+The current code names the local policy result `HarnessIdentityAccess`:
+`Full`, `Redacted`, or `Hidden`. The engine manager still owns minting the
+authoritative `ConnectionClass`; harness code consumes the resulting visibility
+decision, it does not mint the class itself.
 
 When durable harness history is needed, the harness actor opens its **own**
 redb file (e.g. `harness.redb`) through a harness-owned Sema layer over the
@@ -98,8 +102,15 @@ src/harness.rs    harness identity records
 src/runtime.rs    Kameo lifecycle and transcript state owner
 src/terminal.rs   terminal delivery adapter records
 src/transcript.rs transcript event records
-tests/               harness smoke and actor-runtime constraint tests
+tests/            harness smoke and actor-runtime constraint tests
 ```
+
+## Constraint Tests
+
+| Constraint | Test |
+|---|---|
+| Harness identity projection keeps full, redacted, and hidden views distinct. | `nix flake check .#harness-identity-projection-views` |
+| Harness identity projection cannot collapse back to one always-full record. | `nix flake check .#harness-identity-projection-source-constraint` |
 
 ## See Also
 

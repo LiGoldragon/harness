@@ -1,6 +1,6 @@
 use persona_harness::{
-    HarnessBinding, HarnessId, HarnessKind, HarnessTerminalBinding, HarnessTerminalDelivery,
-    HarnessTerminalEndpoint, TranscriptEvent, TranscriptLine,
+    HarnessBinding, HarnessId, HarnessIdentityAccess, HarnessKind, HarnessTerminalBinding,
+    HarnessTerminalDelivery, HarnessTerminalEndpoint, TranscriptEvent, TranscriptLine,
 };
 use signal_persona_terminal::{TerminalInput, TerminalInputBytes, TerminalRequest};
 
@@ -10,6 +10,42 @@ fn harness_binding_keeps_identity() {
 
     assert_eq!(binding.id().as_str(), "operator");
     assert_eq!(binding.working_directory(), "/tmp/op");
+}
+
+#[test]
+fn harness_identity_projection_keeps_full_owner_view() {
+    let binding = HarnessBinding::new(HarnessId::new("operator"), HarnessKind::Codex, "/tmp/op");
+    let projection = binding.identity_projection(HarnessIdentityAccess::Full);
+
+    assert_eq!(
+        projection.id().expect("full view keeps id").as_str(),
+        "operator"
+    );
+    assert_eq!(projection.kind(), Some(&HarnessKind::Codex));
+    assert_eq!(projection.working_directory(), Some("/tmp/op"));
+}
+
+#[test]
+fn harness_identity_projection_redacts_non_owner_view() {
+    let binding = HarnessBinding::new(HarnessId::new("operator"), HarnessKind::Codex, "/tmp/op");
+    let projection = binding.identity_projection(HarnessIdentityAccess::Redacted);
+
+    assert_eq!(
+        projection.id().expect("redacted view keeps id").as_str(),
+        "operator"
+    );
+    assert_eq!(projection.kind(), None);
+    assert_eq!(projection.working_directory(), None);
+}
+
+#[test]
+fn harness_identity_projection_hides_unapproved_external_view() {
+    let binding = HarnessBinding::new(HarnessId::new("operator"), HarnessKind::Codex, "/tmp/op");
+    let projection = binding.identity_projection(HarnessIdentityAccess::Hidden);
+
+    assert_eq!(projection.id(), None);
+    assert_eq!(projection.kind(), None);
+    assert_eq!(projection.working_directory(), None);
 }
 
 #[test]

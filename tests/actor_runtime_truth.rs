@@ -113,6 +113,24 @@ fn harness_runtime_cannot_be_empty_marker() {
 }
 
 #[test]
+fn harness_identity_projection_cannot_leak_everything_by_default() {
+    let source = SourceFile::read(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("harness.rs"),
+    );
+
+    assert!(source.contains("pub enum HarnessIdentityAccess {"));
+    assert!(source.contains("Full,"));
+    assert!(source.contains("Redacted,"));
+    assert!(source.contains("Hidden,"));
+    assert!(source.contains("pub struct HarnessIdentityProjection {"));
+    assert!(source.contains("id: Option<HarnessId>,"));
+    assert!(source.contains("kind: Option<HarnessKind>,"));
+    assert!(source.contains("working_directory: Option<String>,"));
+}
+
+#[test]
 fn terminal_delivery_cannot_use_retired_transport_or_sleep_verification() {
     let source = SourceFile::read(
         Path::new(env!("CARGO_MANIFEST_DIR"))
