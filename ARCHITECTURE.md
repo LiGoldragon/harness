@@ -5,8 +5,8 @@
 `persona-harness` models interactive AI harnesses as addressable runtime
 objects. Codex, Claude, Pi, and later harnesses become typed records with
 lifecycle state, transcript streams, and delivery capabilities. The
-Persona-facing terminal contract is `signal-persona-terminal`; current terminal
-transport execution is delegated to `persona-wezterm`.
+Persona-facing terminal contract is `signal-persona-terminal`; terminal
+transport execution is delegated to `persona-terminal`.
 
 > **Scope.** Any "sema" reference here means today's `sema` library
 > (rename pending → `sema-db`). The eventual `Sema` is broader;
@@ -18,13 +18,13 @@ transport execution is delegated to `persona-wezterm`.
 ## 0 · TL;DR
 
 This repo owns the harness abstraction. It does not own routing policy,
-OS-specific focus observation, or WezTerm's durable PTY transport.
+OS-specific focus observation, or terminal durable PTY transport.
 
 ```mermaid
 flowchart LR
     "persona-router" -->|"delivery request"| "Harness"
     "Harness" -->|"adapter command"| "HarnessAdapter"
-    "HarnessAdapter" -->|"terminal transport"| "persona-wezterm"
+    "HarnessAdapter" -->|"terminal transport"| "persona-terminal"
     "Harness" -->|"transcript event"| "persona-router"
     "Harness" -->|"harness-owned state"| "harness Sema"
 ```
@@ -68,7 +68,7 @@ This repo does not own:
 
 - routing decisions (`persona-router`);
 - OS/window focus backend (`persona-system`);
-- PTY and WezTerm byte transport (`persona-wezterm`);
+- PTY byte transport (`persona-terminal`);
 - harness wire contract definitions (`signal-persona-harness`);
 - terminal wire contract definitions (`signal-persona-terminal`);
 - the top-level engine-manager contract (`signal-persona`);
@@ -96,6 +96,6 @@ tests/               harness smoke and actor-runtime constraint tests
 
 - `../persona-router/ARCHITECTURE.md`
 - `../persona-system/ARCHITECTURE.md`
-- `../persona-wezterm/ARCHITECTURE.md`
+- `../persona-terminal/ARCHITECTURE.md`
 - `../sema/ARCHITECTURE.md`
 - `../signal-persona-harness/ARCHITECTURE.md`

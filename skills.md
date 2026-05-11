@@ -7,7 +7,7 @@ Rules for work here:
 
 - Keep routing policy in `persona-router`.
 - Keep OS/window-manager observations in `persona-system`.
-- Keep durable PTY and WezTerm viewer transport in `persona-wezterm`.
+- Keep durable PTY and viewer transport in `persona-terminal`.
 - Model harness capabilities as typed values, not strings.
 - Keep live lifecycle and transcript state inside `Harness`; do not add
   alternate runtime wrappers or public handle wrappers.

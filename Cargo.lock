@@ -454,22 +454,24 @@ name = "persona-harness"
 version = "0.1.0"
 dependencies = [
  "kameo",
- "persona-wezterm",
+ "persona-terminal",
  "signal-persona-terminal",
  "thiserror 2.0.18",
  "tokio",
 ]
 
 [[package]]
-name = "persona-wezterm"
+name = "persona-terminal"
 version = "0.1.0"
-source = "git+https://github.com/LiGoldragon/persona-wezterm.git?branch=main#e739e7c4c6185139b8fa7cf074758cd6ae72fd0a"
+source = "git+https://github.com/LiGoldragon/persona-terminal.git?branch=main#c80a01899c5a92bc66a8f697abf1d933a4beb634"
 dependencies = [
  "crossterm",
  "kameo",
- "portable-pty",
+ "signal-hook",
  "signal-persona-terminal",
+ "terminal-cell",
  "thiserror 2.0.18",
+ "tokio",
  "vt100",
 ]
 
@@ -717,7 +719,7 @@ checksum = "dc6fe69c597f9c37bfeeeeeb33da3530379845f10be461a66d16d03eca2ded77"
 [[package]]
 name = "signal-core"
 version = "0.1.0"
-source = "git+https://github.com/LiGoldragon/signal-core.git#e27bc600fa9129c4482427ab00c40ecab419d098"
+source = "git+https://github.com/LiGoldragon/signal-core.git#ba5021be2223fdb2f6571eaf2a503abc74aa6829"
 dependencies = [
  "nota-codec",
  "rkyv",
@@ -758,7 +760,7 @@ dependencies = [
 [[package]]
 name = "signal-persona-terminal"
 version = "0.1.0"
-source = "git+https://github.com/LiGoldragon/signal-persona-terminal.git?branch=main#1cc221e0b600e9c17615750fadb50ad2bc97f5a8"
+source = "git+https://github.com/LiGoldragon/signal-persona-terminal.git?branch=main#186987a4399f4d0a072dabe2f1d143f786a10388"
 dependencies = [
  "rkyv",
  "signal-core",
@@ -792,6 +794,20 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "terminal-cell"
+version = "0.1.0"
+source = "git+https://github.com/LiGoldragon/terminal-cell.git?branch=main#c24553bdf0af05a635edbb2db7ae4de71b106f7b"
+dependencies = [
+ "crossterm",
+ "kameo",
+ "portable-pty",
+ "signal-hook",
+ "thiserror 2.0.18",
+ "tokio",
+ "vt100",
 ]
 
 [[package]]

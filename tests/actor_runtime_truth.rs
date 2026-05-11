@@ -112,6 +112,31 @@ fn harness_runtime_cannot_be_empty_marker() {
     assert!(source.contains("minimum_transcript_events: u64,"));
 }
 
+#[test]
+fn terminal_delivery_cannot_use_retired_transport_or_sleep_verification() {
+    let source = SourceFile::read(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("terminal.rs"),
+    );
+
+    for fragment in [
+        "persona_wezterm",
+        "WezTerm",
+        "WezTermMux",
+        "thread::sleep",
+        "Duration::from_millis",
+    ] {
+        assert!(
+            !source.contains(fragment),
+            "terminal delivery still carries retired transport fragment {fragment}"
+        );
+    }
+
+    assert!(source.contains("persona_terminal::contract::TerminalTransportBinding"));
+    assert!(source.contains("TerminalEvent::TerminalInputAccepted"));
+}
+
 #[tokio::test]
 async fn harness_runtime_cannot_forget_lifecycle_between_messages() {
     let harness = Harness::start(binding()).await;

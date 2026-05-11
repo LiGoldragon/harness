@@ -1,12 +1,9 @@
 use std::path::{Path, PathBuf};
-use std::thread;
-use std::time::Duration;
 
-use persona_wezterm::contract::TerminalTransportBinding;
-use persona_wezterm::terminal::{TerminalPrompt, WezTermMux};
+use persona_terminal::contract::TerminalTransportBinding;
 use signal_persona_terminal::{
-    TerminalCapture, TerminalEvent, TerminalInput, TerminalInputAccepted, TerminalInputBytes,
-    TerminalName, TerminalRequest,
+    TerminalCapture, TerminalEvent, TerminalInput, TerminalInputBytes, TerminalName,
+    TerminalRequest,
 };
 
 use crate::{HarnessId, Result};
@@ -54,25 +51,12 @@ impl HarnessTerminalBinding {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HarnessTerminalEndpoint {
     Human,
-    PtySocket {
-        path: PathBuf,
-    },
-    WezTermPane {
-        pane_id: u32,
-        mux_socket: Option<PathBuf>,
-    },
+    PtySocket { path: PathBuf },
 }
 
 impl HarnessTerminalEndpoint {
     pub fn pty_socket(path: impl Into<PathBuf>) -> Self {
         Self::PtySocket { path: path.into() }
-    }
-
-    pub fn wezterm_pane(pane_id: u32, mux_socket: Option<impl Into<PathBuf>>) -> Self {
-        Self::WezTermPane {
-            pane_id,
-            mux_socket: mux_socket.map(Into::into),
-        }
     }
 }
 
@@ -141,10 +125,6 @@ impl HarnessTerminalDelivery {
             HarnessTerminalEndpoint::PtySocket { path } => {
                 self.deliver_to_pty(binding, text, path.as_path())
             }
-            HarnessTerminalEndpoint::WezTermPane {
-                pane_id,
-                mux_socket,
-            } => self.deliver_to_wezterm(binding, text, pane_id, mux_socket.as_deref()),
         }
     }
 
@@ -159,49 +139,11 @@ impl HarnessTerminalDelivery {
         let mut bytes = text.as_bytes().to_vec();
         bytes.push(b'\r');
         let accepted_event = transport.handle_request(binding.input_request(bytes))?;
-        thread::sleep(Duration::from_millis(1000));
-        let capture_event = transport.handle_request(binding.capture_request())?;
-        let delivered = captured_event_contains(&capture_event, text);
+        let delivered = matches!(accepted_event, TerminalEvent::TerminalInputAccepted(_));
         self.delivered_input_count = self.delivered_input_count.saturating_add(1);
         Ok(TerminalDeliveryReceipt::from_transport(
             delivered,
             accepted_event,
         ))
-    }
-
-    fn deliver_to_wezterm(
-        &mut self,
-        binding: &HarnessTerminalBinding,
-        text: &str,
-        pane_id: u32,
-        mux_socket: Option<&Path>,
-    ) -> Result<TerminalDeliveryReceipt> {
-        let prompt = TerminalPrompt::from_text(text);
-        let mux = match mux_socket {
-            Some(socket) => WezTermMux::from_environment().with_socket(socket),
-            None => WezTermMux::from_environment(),
-        };
-        mux.pane(pane_id).deliver(&prompt)?;
-        self.delivered_input_count = self.delivered_input_count.saturating_add(1);
-        Ok(TerminalDeliveryReceipt::from_transport(
-            true,
-            TerminalInputAccepted {
-                terminal: binding.terminal().clone(),
-                generation: signal_persona_terminal::TerminalGeneration::new(
-                    self.delivered_input_count,
-                ),
-            }
-            .into(),
-        ))
-    }
-}
-
-fn captured_event_contains(event: &TerminalEvent, expected: &str) -> bool {
-    let evidence = expected.chars().take(24).collect::<String>();
-    match event {
-        TerminalEvent::TerminalCaptured(captured) => {
-            String::from_utf8_lossy(captured.bytes.as_slice()).contains(&evidence)
-        }
-        _ => false,
     }
 }

@@ -14,7 +14,7 @@ path = "src/lib.rs"
 
 [dependencies]
 kameo                   = { version = "0.20", default-features = false, features = ["macros", "tracing"] }
-persona-wezterm         = { git = "https://github.com/LiGoldragon/persona-wezterm.git", branch = "main" }
+persona-terminal       = { git = "https://github.com/LiGoldragon/persona-terminal.git", branch = "main" }
 signal-persona-terminal = { git = "https://github.com/LiGoldragon/signal-persona-terminal.git", branch = "main" }
 thiserror               = "2"
 tokio                   = { version = "1", features = ["rt-multi-thread", "macros"] }
