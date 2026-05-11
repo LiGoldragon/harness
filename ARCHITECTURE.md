@@ -48,6 +48,12 @@ Transcript and lifecycle events are typed observations. `Harness` is the
 mailbox-backed owner for one live harness binding, its lifecycle state, and its
 transcript event count.
 
+Harness identity views are connection-class aware. `Owner` and
+`System(persona)` connections may receive full harness identity records.
+`NonOwnerUser` connections receive redacted views by default. `OtherPersona`
+connections see harness identity only through an explicit `EngineRoute`
+projection; no incidental identity leak is acceptable.
+
 When durable harness history is needed, the harness actor opens its **own**
 redb file (e.g. `harness.redb`) through a harness-owned Sema layer over the
 workspace's `sema` database library. The harness actor sequences its own
@@ -59,6 +65,7 @@ writes; no shared cross-component database. Per
 This repo owns:
 
 - harness domain types;
+- class-aware harness identity projections;
 - harness actor lifecycle;
 - transcript event shape;
 - adapter contracts.
@@ -77,6 +84,8 @@ This repo does not own:
 ## 4 · Invariants
 
 - Harnesses are first-class records.
+- Harness identity has an explicit visibility axis; redaction is typed, not a
+  string filter.
 - A closed viewer does not imply a killed harness.
 - Transcript and lifecycle observations are pushed events.
 - Live harness lifecycle and transcript state belongs inside Kameo actors.
