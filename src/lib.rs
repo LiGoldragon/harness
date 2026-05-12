@@ -1,9 +1,14 @@
+pub mod daemon;
 pub mod error;
 pub mod harness;
 pub mod runtime;
 pub mod terminal;
 pub mod transcript;
 
+pub use daemon::{
+    BoundHarnessDaemon, HarnessCommandLine, HarnessConnection, HarnessDaemon, HarnessFrameCodec,
+    HarnessRequestHandler,
+};
 pub use error::{Error, Result};
 pub use harness::{
     HarnessBinding, HarnessId, HarnessIdentityProjection, HarnessIdentityView, HarnessKind,

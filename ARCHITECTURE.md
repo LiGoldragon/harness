@@ -35,6 +35,8 @@ flowchart LR
 
 `persona-harness` exposes:
 
+- a `persona-harness-daemon` skeleton binary for the first-stack engine
+  supervision witness;
 - harness identity records;
 - lifecycle state;
 - transcript events;
@@ -101,11 +103,18 @@ This repo does not own:
 - Live harness lifecycle and transcript state belongs inside Kameo actors.
 - Adapter capabilities are explicit typed records, not stringly flags.
 - Fixture-only terminal endpoints cannot claim real terminal delivery.
+- The daemon accepts length-prefixed `signal-persona-harness` frames.
+- The daemon answers `HarnessStatusQuery` with typed health and readiness.
+- The daemon returns `HarnessRequestUnimplemented` for valid contract
+  operations that are not built yet.
+- The daemon does not print untyped text errors for recognized unfinished
+  operations.
 
 ## Code Map
 
 ```text
 src/harness.rs    harness identity records
+src/daemon.rs     length-prefixed Signal daemon skeleton
 src/runtime.rs    Kameo lifecycle and transcript state owner
 src/terminal.rs   terminal delivery adapter records
 src/transcript.rs transcript event records
@@ -119,6 +128,8 @@ tests/            harness smoke and actor-runtime constraint tests
 | Harness identity projection keeps full, redacted, and hidden views distinct. | `nix flake check .#harness-identity-projection-views` |
 | Harness identity projection cannot collapse back to one always-full record. | `nix flake check .#harness-identity-projection-source-constraint` |
 | Fixture-only human terminal endpoints cannot claim production delivery. | `nix flake check .#terminal-fixture-endpoint-not-production-delivery` |
+| Harness daemon answers status/readiness through its Signal boundary. | `nix flake check .#harness-daemon-answers-status-readiness` |
+| Harness daemon returns typed unimplemented for valid unfinished requests. | `nix flake check .#harness-daemon-returns-typed-unimplemented` |
 
 ## See Also
 

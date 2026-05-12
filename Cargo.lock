@@ -3,6 +3,15 @@
 version = 4
 
 [[package]]
+name = "aho-corasick"
+version = "1.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ddd31a130427c27518df266943a5308ed92d4b226cc639f5a8f1002816174301"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
 name = "anyhow"
 version = "1.0.102"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -404,7 +413,7 @@ dependencies = [
 [[package]]
 name = "nota-codec"
 version = "0.1.0"
-source = "git+https://github.com/LiGoldragon/nota-codec.git?branch=main#c01afb680acdca73f0667c2669c08e7d91bca0f4"
+source = "git+https://github.com/LiGoldragon/nota-codec.git?branch=main#2618adbfc140d856723a729c316203d006af8207"
 dependencies = [
  "nota-derive",
  "thiserror 2.0.18",
@@ -413,7 +422,7 @@ dependencies = [
 [[package]]
 name = "nota-derive"
 version = "0.1.0"
-source = "git+https://github.com/LiGoldragon/nota-derive.git?branch=main#9a002cea928b4a8aadf7bc24d5886aaa4e9a3666"
+source = "git+https://github.com/LiGoldragon/nota-derive.git?branch=main#0d1c24086ae585c84ad92317bb8c463b8cc95697"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -455,6 +464,8 @@ version = "0.1.0"
 dependencies = [
  "kameo",
  "persona-terminal",
+ "signal-core",
+ "signal-persona-harness",
  "signal-persona-terminal",
  "thiserror 2.0.18",
  "tokio",
@@ -463,10 +474,14 @@ dependencies = [
 [[package]]
 name = "persona-terminal"
 version = "0.1.0"
-source = "git+https://github.com/LiGoldragon/persona-terminal.git?branch=main#c80a01899c5a92bc66a8f697abf1d933a4beb634"
+source = "git+https://github.com/LiGoldragon/persona-terminal.git?branch=main#d1c4c688580eae764e280529e54744de90e89cee"
 dependencies = [
  "crossterm",
  "kameo",
+ "regex",
+ "rkyv",
+ "sema",
+ "signal-core",
  "signal-hook",
  "signal-persona-terminal",
  "terminal-cell",
@@ -556,6 +571,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "redb"
+version = "4.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e925444704b5f17d32bf42f5b6e2df050bceebc3dcd6e71cc73dafe8092e839"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "redox_syscall"
 version = "0.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -563,6 +587,35 @@ checksum = "ed2bf2547551a7053d6fdfafda3f938979645c44812fbfcda098faae3f1a362d"
 dependencies = [
  "bitflags 2.11.1",
 ]
+
+[[package]]
+name = "regex"
+version = "1.12.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e10754a14b9137dd7b1e3e5b0493cc9171fdd105e0ab477f51b72e7f3ac0e276"
+dependencies = [
+ "aho-corasick",
+ "memchr",
+ "regex-automata",
+ "regex-syntax",
+]
+
+[[package]]
+name = "regex-automata"
+version = "0.4.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6e1dd4122fc1595e8162618945476892eefca7b88c52820e74af6262213cae8f"
+dependencies = [
+ "aho-corasick",
+ "memchr",
+ "regex-syntax",
+]
+
+[[package]]
+name = "regex-syntax"
+version = "0.8.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
 name = "rend"
@@ -627,6 +680,16 @@ name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
+
+[[package]]
+name = "sema"
+version = "0.1.0"
+source = "git+https://github.com/LiGoldragon/sema.git#eba7122b2a7b70894b24cd18d5acdcd0dbd455f4"
+dependencies = [
+ "redb",
+ "rkyv",
+ "thiserror 2.0.18",
+]
 
 [[package]]
 name = "serde"
@@ -719,7 +782,7 @@ checksum = "dc6fe69c597f9c37bfeeeeeb33da3530379845f10be461a66d16d03eca2ded77"
 [[package]]
 name = "signal-core"
 version = "0.1.0"
-source = "git+https://github.com/LiGoldragon/signal-core.git#ba5021be2223fdb2f6571eaf2a503abc74aa6829"
+source = "git+https://github.com/LiGoldragon/signal-core.git#9f4e20b4917aa1655004b3701ecbf5bce0eac071"
 dependencies = [
  "nota-codec",
  "rkyv",
@@ -758,10 +821,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "signal-persona-harness"
+version = "0.1.0"
+source = "git+https://github.com/LiGoldragon/signal-persona-harness.git?branch=main#283eacf183934809337c7f83dfa88d565ad5787b"
+dependencies = [
+ "nota-codec",
+ "rkyv",
+ "signal-core",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "signal-persona-terminal"
 version = "0.1.0"
-source = "git+https://github.com/LiGoldragon/signal-persona-terminal.git?branch=main#186987a4399f4d0a072dabe2f1d143f786a10388"
+source = "git+https://github.com/LiGoldragon/signal-persona-terminal.git?branch=main#ea5e2174f3a623e247575cb052a79d86df28dff2"
 dependencies = [
+ "nota-codec",
  "rkyv",
  "signal-core",
  "thiserror 2.0.18",
@@ -799,12 +874,15 @@ dependencies = [
 [[package]]
 name = "terminal-cell"
 version = "0.1.0"
-source = "git+https://github.com/LiGoldragon/terminal-cell.git?branch=main#c24553bdf0af05a635edbb2db7ae4de71b106f7b"
+source = "git+https://github.com/LiGoldragon/terminal-cell.git?branch=main#702fdf71340ab3be5ece9ee9a8a8a21349679ff5"
 dependencies = [
  "crossterm",
  "kameo",
  "portable-pty",
+ "regex",
+ "signal-core",
  "signal-hook",
+ "signal-persona-terminal",
  "thiserror 2.0.18",
  "tokio",
  "vt100",

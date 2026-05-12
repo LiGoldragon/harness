@@ -2,7 +2,7 @@
 name         = "persona-harness"
 version      = "0.1.0"
 edition      = "2024"
-rust-version = "1.88"
+rust-version = "1.89"
 license      = "MIT OR Apache-2.0"
 repository   = "https://github.com/LiGoldragon/persona-harness"
 description  = "Interactive harness abstraction for Persona."
@@ -12,9 +12,15 @@ publish      = false
 name = "persona_harness"
 path = "src/lib.rs"
 
+[[bin]]
+name = "persona-harness-daemon"
+path = "src/main.rs"
+
 [dependencies]
 kameo                   = { version = "0.20", default-features = false, features = ["macros", "tracing"] }
 persona-terminal       = { git = "https://github.com/LiGoldragon/persona-terminal.git", branch = "main" }
+signal-core            = { git = "https://github.com/LiGoldragon/signal-core.git" }
+signal-persona-harness = { git = "https://github.com/LiGoldragon/signal-persona-harness.git", branch = "main" }
 signal-persona-terminal = { git = "https://github.com/LiGoldragon/signal-persona-terminal.git", branch = "main" }
 thiserror               = "2"
 tokio                   = { version = "1", features = ["rt-multi-thread", "macros"] }

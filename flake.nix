@@ -3,95 +3,143 @@
 
   inputs = {
     nixpkgs.url = "github:LiGoldragon/nixpkgs?ref=main";
+
+    fenix.url = "github:nix-community/fenix";
+    fenix.inputs.nixpkgs.follows = "nixpkgs";
+
+    crane.url = "github:ipetkov/crane";
   };
 
   outputs =
-    { self, nixpkgs }:
+    {
+      self,
+      nixpkgs,
+      fenix,
+      crane,
+    }:
     let
       systems = [
         "x86_64-linux"
         "aarch64-linux"
       ];
-      forSystems =
-        function: nixpkgs.lib.genAttrs systems (system: function system nixpkgs.legacyPackages.${system});
-      cargoLock = {
-        lockFile = ./Cargo.lock;
-        outputHashes = {
-          "nota-codec-0.1.0" = "sha256-c32c6hzVP8pbuAWqKbD552nWSNS64CPSyMW23hrlUyg=";
-          "nota-derive-0.1.0" = "sha256-2Gb50KBnqb1stlbCWcYvCRadO2VdMBb5a9limdyXx9I=";
-          "persona-terminal-0.1.0" = "sha256-s9sAdnUBFumpiUAXtCrVAx+afOpcbvOV5tLcICLAA9o=";
-          "terminal-cell-0.1.0" = "sha256-Aos+3HYumEOj6EOOGifAGYB0TQGA6TYVIyqitWYoVMY=";
-          "signal-core-0.1.0" = "sha256-QGcKXD2ECbVrfOt1OWtkFoDFalV2/5rAYaKpBimjTPY=";
-          "signal-persona-terminal-0.1.0" = "sha256-prv9VKZfz0a6Jq9mmPAXoamyzfMAvevX/KT3yzjtpzc=";
+      forSystems = function: nixpkgs.lib.genAttrs systems (system: function system);
+      mkContext =
+        system:
+        let
+          pkgs = import nixpkgs { inherit system; };
+          toolchain = fenix.packages.${system}.stable.withComponents [
+            "cargo"
+            "rustc"
+            "rustfmt"
+            "clippy"
+            "rust-src"
+          ];
+          craneLib = (crane.mkLib pkgs).overrideToolchain toolchain;
+          src = craneLib.cleanCargoSource ./.;
+          commonArgs = {
+            inherit src;
+            strictDeps = true;
+          };
+          cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+          cargoTest =
+            testTarget: testName:
+            craneLib.cargoTest (
+              commonArgs
+              // {
+                inherit cargoArtifacts;
+                cargoTestExtraArgs = "--test ${testTarget} ${testName} -- --exact";
+              }
+            );
+        in
+        {
+          inherit
+            pkgs
+            toolchain
+            craneLib
+            commonArgs
+            cargoArtifacts
+            cargoTest
+            ;
         };
-      };
-      mkHarnessPackage =
-        pkgs: extraArgs:
-        pkgs.rustPlatform.buildRustPackage (
-          {
-            pname = "persona-harness";
-            version = "0.1.0";
-            src = ./.;
-            inherit cargoLock;
-          }
-          // extraArgs
-        );
     in
     {
       packages = forSystems (
-        system: pkgs: {
-          default = mkHarnessPackage pkgs { };
+        system:
+        let
+          context = mkContext system;
+        in
+        {
+          default = context.craneLib.buildPackage (
+            context.commonArgs
+            // {
+              inherit (context) cargoArtifacts;
+              pname = "persona-harness";
+              meta.mainProgram = "persona-harness-daemon";
+            }
+          );
         }
       );
 
       checks = forSystems (
-        system: pkgs: {
-          default = self.packages.${system}.default;
-          harness-identity-projection-views = mkHarnessPackage pkgs {
-            cargoTestFlags = [
-              "--test"
-              "smoke"
-              "harness_identity_projection"
-            ];
-          };
-          harness-identity-projection-source-constraint = mkHarnessPackage pkgs {
-            cargoTestFlags = [
-              "--test"
-              "actor_runtime_truth"
-              "harness_identity_projection_cannot_leak_everything_by_default"
-            ];
-          };
-          harness-kind-closed-schema-enum = mkHarnessPackage pkgs {
-            cargoTestFlags = [
-              "--test"
-              "actor_runtime_truth"
-              "harness_kind_is_closed_schema_enum"
-            ];
-          };
-          terminal-fixture-endpoint-not-production-delivery = mkHarnessPackage pkgs {
-            cargoTestFlags = [
-              "--test"
-              "actor_runtime_truth"
-              "fixture_human_endpoint_cannot_be_production_delivery"
-            ];
+        system:
+        let
+          context = mkContext system;
+        in
+        {
+          default = context.craneLib.cargoTest (
+            context.commonArgs
+            // {
+              inherit (context) cargoArtifacts;
+            }
+          );
+          harness-identity-projection-views =
+            context.cargoTest "smoke" "harness_identity_projection_keeps_full_owner_view";
+          harness-identity-projection-source-constraint = context.cargoTest "actor_runtime_truth"
+            "harness_identity_projection_cannot_leak_everything_by_default";
+          harness-kind-closed-schema-enum =
+            context.cargoTest "actor_runtime_truth" "harness_kind_is_closed_schema_enum";
+          terminal-fixture-endpoint-not-production-delivery = context.cargoTest
+            "actor_runtime_truth"
+            "fixture_human_endpoint_cannot_be_production_delivery";
+          harness-daemon-answers-status-readiness =
+            context.cargoTest "daemon" "harness_daemon_answers_status_readiness";
+          harness-daemon-returns-typed-unimplemented =
+            context.cargoTest "daemon" "harness_daemon_returns_typed_unimplemented";
+        }
+      );
+
+      apps = forSystems (
+        system:
+        {
+          default = {
+            type = "app";
+            program = "${self.packages.${system}.default}/bin/persona-harness-daemon";
           };
         }
       );
 
       devShells = forSystems (
-        system: pkgs: {
-          default = pkgs.mkShell {
+        system:
+        let
+          context = mkContext system;
+        in
+        {
+          default = context.pkgs.mkShell {
             packages = [
-              pkgs.cargo
-              pkgs.clippy
-              pkgs.rust-analyzer
-              pkgs.rustc
-              pkgs.rustfmt
+              context.pkgs.jujutsu
+              context.pkgs.pkg-config
+              context.toolchain
             ];
           };
         }
       );
 
-      formatter = forSystems (system: pkgs: pkgs.nixfmt);
+      formatter = forSystems (
+        system:
+        let
+          context = mkContext system;
+        in
+        context.pkgs.nixfmt
+      );
     };
 }
