@@ -1,6 +1,7 @@
 use persona_harness::{
     HarnessBinding, HarnessId, HarnessIdentityView, HarnessKind, HarnessTerminalBinding,
-    HarnessTerminalDelivery, HarnessTerminalEndpoint, TranscriptEvent, TranscriptLine,
+    HarnessTerminalDelivery, HarnessTerminalEndpoint, TerminalDeliveryPath, TranscriptEvent,
+    TranscriptLine,
 };
 use signal_persona_terminal::{TerminalInput, TerminalInputBytes, TerminalRequest};
 
@@ -78,14 +79,15 @@ fn terminal_binding_builds_typed_input_request() {
 }
 
 #[test]
-fn human_terminal_endpoint_is_local_success() {
+fn fixture_only_human_terminal_endpoint_cannot_claim_transport_delivery() {
     let binding = HarnessTerminalBinding::for_harness(HarnessId::new("operator"));
-    let mut delivery = HarnessTerminalDelivery::new(HarnessTerminalEndpoint::Human);
+    let mut delivery = HarnessTerminalDelivery::new(HarnessTerminalEndpoint::fixture_only_human());
     let receipt = delivery
         .deliver_text(&binding, "local")
-        .expect("human endpoint has no transport failure");
+        .expect("fixture-only endpoint has no transport failure");
 
-    assert!(receipt.delivered());
+    assert!(!receipt.delivered());
+    assert_eq!(receipt.path(), TerminalDeliveryPath::FixtureOnly);
     assert_eq!(receipt.accepted_event(), None);
-    assert_eq!(delivery.delivered_input_count(), 1);
+    assert_eq!(delivery.delivered_input_count(), 0);
 }

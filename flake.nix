@@ -68,6 +68,13 @@
               "harness_kind_is_closed_schema_enum"
             ];
           };
+          terminal-fixture-endpoint-not-production-delivery = mkHarnessPackage pkgs {
+            cargoTestFlags = [
+              "--test"
+              "actor_runtime_truth"
+              "fixture_human_endpoint_cannot_be_production_delivery"
+            ];
+          };
         }
       );
 

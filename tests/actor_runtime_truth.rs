@@ -174,6 +174,22 @@ fn terminal_delivery_cannot_use_retired_transport_or_sleep_verification() {
     assert!(source.contains("TerminalEvent::TerminalInputAccepted"));
 }
 
+#[test]
+fn fixture_human_endpoint_cannot_be_production_delivery() {
+    let source = SourceFile::read(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("terminal.rs"),
+    );
+
+    assert!(!source.contains("\n    Human,"));
+    assert!(!source.contains("HarnessTerminalEndpoint::Human"));
+    assert!(source.contains("FixtureOnlyHuman"));
+    assert!(source.contains("TerminalDeliveryPath::FixtureOnly"));
+    assert!(source.contains("TerminalDeliveryPath::TerminalTransport"));
+    assert!(source.contains("delivered: false"));
+}
+
 #[tokio::test]
 async fn harness_runtime_cannot_forget_lifecycle_between_messages() {
     let harness = Harness::start(binding()).await;

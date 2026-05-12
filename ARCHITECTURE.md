@@ -43,6 +43,12 @@ flowchart LR
 - a Kameo harness actor surface for the assembled runtime;
 - test fixtures for fake harnesses.
 
+The only endpoint that may complete without sending bytes to terminal
+transport is `FixtureOnlyHuman`. It is a fixture endpoint, not production
+delivery. Production terminal delivery uses the `persona-terminal` transport
+binding and counts an input as delivered only after
+`TerminalEvent::TerminalInputAccepted`.
+
 ## 2 · State and Ownership
 
 The harness component owns live harness identity and lifecycle state.
@@ -94,6 +100,7 @@ This repo does not own:
 - Transcript and lifecycle observations are pushed events.
 - Live harness lifecycle and transcript state belongs inside Kameo actors.
 - Adapter capabilities are explicit typed records, not stringly flags.
+- Fixture-only terminal endpoints cannot claim real terminal delivery.
 
 ## Code Map
 
@@ -111,6 +118,7 @@ tests/            harness smoke and actor-runtime constraint tests
 |---|---|
 | Harness identity projection keeps full, redacted, and hidden views distinct. | `nix flake check .#harness-identity-projection-views` |
 | Harness identity projection cannot collapse back to one always-full record. | `nix flake check .#harness-identity-projection-source-constraint` |
+| Fixture-only human terminal endpoints cannot claim production delivery. | `nix flake check .#terminal-fixture-endpoint-not-production-delivery` |
 
 ## See Also
 

@@ -12,7 +12,7 @@ pub use runtime::{
     Harness, HarnessLifecycle, HarnessState, ReadState, RecordTranscriptLine, SetHarnessLifecycle,
 };
 pub use terminal::{
-    HarnessTerminalBinding, HarnessTerminalDelivery, HarnessTerminalEndpoint,
+    HarnessTerminalBinding, HarnessTerminalDelivery, HarnessTerminalEndpoint, TerminalDeliveryPath,
     TerminalDeliveryReceipt,
 };
 pub use transcript::{TranscriptEvent, TranscriptLine};

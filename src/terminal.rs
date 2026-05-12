@@ -50,26 +50,38 @@ impl HarnessTerminalBinding {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HarnessTerminalEndpoint {
-    Human,
+    FixtureOnlyHuman,
     PtySocket { path: PathBuf },
 }
 
 impl HarnessTerminalEndpoint {
+    pub fn fixture_only_human() -> Self {
+        Self::FixtureOnlyHuman
+    }
+
     pub fn pty_socket(path: impl Into<PathBuf>) -> Self {
         Self::PtySocket { path: path.into() }
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerminalDeliveryPath {
+    FixtureOnly,
+    TerminalTransport,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TerminalDeliveryReceipt {
     delivered: bool,
+    path: TerminalDeliveryPath,
     accepted_event: Option<TerminalEvent>,
 }
 
 impl TerminalDeliveryReceipt {
-    fn human() -> Self {
+    fn fixture_only() -> Self {
         Self {
-            delivered: true,
+            delivered: false,
+            path: TerminalDeliveryPath::FixtureOnly,
             accepted_event: None,
         }
     }
@@ -77,12 +89,17 @@ impl TerminalDeliveryReceipt {
     fn from_transport(delivered: bool, accepted_event: TerminalEvent) -> Self {
         Self {
             delivered,
+            path: TerminalDeliveryPath::TerminalTransport,
             accepted_event: Some(accepted_event),
         }
     }
 
     pub fn delivered(&self) -> bool {
         self.delivered
+    }
+
+    pub fn path(&self) -> TerminalDeliveryPath {
+        self.path
     }
 
     pub fn accepted_event(&self) -> Option<&TerminalEvent> {
@@ -118,9 +135,8 @@ impl HarnessTerminalDelivery {
         text: &str,
     ) -> Result<TerminalDeliveryReceipt> {
         match self.endpoint.clone() {
-            HarnessTerminalEndpoint::Human => {
-                self.delivered_input_count = self.delivered_input_count.saturating_add(1);
-                Ok(TerminalDeliveryReceipt::human())
+            HarnessTerminalEndpoint::FixtureOnlyHuman => {
+                Ok(TerminalDeliveryReceipt::fixture_only())
             }
             HarnessTerminalEndpoint::PtySocket { path } => {
                 self.deliver_to_pty(binding, text, path.as_path())
@@ -140,7 +156,9 @@ impl HarnessTerminalDelivery {
         bytes.push(b'\r');
         let accepted_event = transport.handle_request(binding.input_request(bytes))?;
         let delivered = matches!(accepted_event, TerminalEvent::TerminalInputAccepted(_));
-        self.delivered_input_count = self.delivered_input_count.saturating_add(1);
+        if delivered {
+            self.delivered_input_count = self.delivered_input_count.saturating_add(1);
+        }
         Ok(TerminalDeliveryReceipt::from_transport(
             delivered,
             accepted_event,
