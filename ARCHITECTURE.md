@@ -51,6 +51,35 @@ delivery. Production terminal delivery uses the `persona-terminal` transport
 binding and counts an input as delivered only after
 `TerminalEvent::TerminalInputAccepted`.
 
+## 1.5 · Lifecycle FSM and supervision-relation reception
+
+The harness daemon answers `signal-persona::SupervisionRequest` from a
+canonical `SupervisionPhase` Kameo actor (per
+`~/primary/reports/designer/142-supervision-in-signal-persona-no-message-proxy-daemon.md` §2.2
+and
+`~/primary/reports/designer/143-prototype-readiness-gap-audit.md` §4.2).
+The daemon reads its `signal-persona::SpawnEnvelope` at startup, binds
+`harness.sock` at mode 0600, and proceeds.
+
+**Harness lifecycle FSM** (closed enum, per /143 §5.5):
+
+```text
+HarnessLifecycle
+  | Starting     -- spawned, awaiting first ready signal
+  | Running      -- ready to accept MessageDelivery
+  | Paused       -- temporarily suspended (no new deliveries; in-flight complete)
+  | Stopped      -- exited (clean or crash; distinguishable via exit_code)
+```
+
+Readiness mapping for `SupervisionRequest::ComponentReadinessQuery`:
+
+- `Running` and `Paused` → `ComponentReady { component_started_at }`
+- `Starting` and `Stopped` → `ComponentNotReady { reason }`
+
+Unbuilt domain operations reply
+`HarnessEvent::HarnessRequestUnimplemented` (per /143 §4.3) rather than
+panicking or printing untyped text.
+
 ## 2 · State and Ownership
 
 The harness component owns live harness identity and lifecycle state.
