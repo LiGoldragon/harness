@@ -54,14 +54,11 @@ binding and counts an input as delivered only after
 ## 1.5 · Lifecycle FSM and supervision-relation reception
 
 The harness daemon answers `signal-persona::SupervisionRequest` from a
-canonical `SupervisionPhase` Kameo actor (per
-`~/primary/reports/designer/142-supervision-in-signal-persona-no-message-proxy-daemon.md` §2.2
-and
-`~/primary/reports/designer/143-prototype-readiness-gap-audit.md` §4.2).
-The daemon reads its `signal-persona::SpawnEnvelope` at startup, binds
-`harness.sock` at mode 0600, and proceeds.
+canonical `SupervisionPhase` Kameo actor. The daemon reads its
+`signal-persona::SpawnEnvelope` at startup, binds `harness.sock` at
+mode 0600, and proceeds.
 
-**Harness lifecycle FSM** (closed enum, per /143 §5.5):
+**Harness lifecycle FSM** (closed enum):
 
 ```text
 HarnessLifecycle
@@ -77,8 +74,8 @@ Readiness mapping for `SupervisionRequest::ComponentReadinessQuery`:
 - `Starting` and `Stopped` → `ComponentNotReady { reason }`
 
 Unbuilt domain operations reply
-`HarnessEvent::HarnessRequestUnimplemented` (per /143 §4.3) rather than
-panicking or printing untyped text.
+`HarnessEvent::HarnessRequestUnimplemented` rather than panicking or
+printing untyped text.
 
 ## 2 · State and Ownership
 
@@ -98,8 +95,7 @@ router channel state choreographed by mind.
 When durable harness history is needed, the harness actor opens its **own**
 redb file (e.g. `harness.redb`) through a harness-owned Sema layer over the
 workspace's `sema` database library. The harness actor sequences its own
-writes; no shared cross-component database. Per
-`~/primary/reports/designer/92-sema-as-database-library-architecture-revamp.md`.
+writes; no shared cross-component database.
 
 ## 3 · Boundaries
 
