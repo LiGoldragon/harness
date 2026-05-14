@@ -56,7 +56,8 @@ binding and counts an input as delivered only after
 The harness daemon answers `signal-persona::SupervisionRequest` from a
 canonical `SupervisionPhase` Kameo actor. The daemon reads its
 `signal-persona::SpawnEnvelope` at startup, binds `harness.sock` at
-mode 0600, and proceeds.
+mode 0600 by applying the `PERSONA_SOCKET_MODE` value from the Persona spawn
+envelope, and proceeds.
 
 **Harness lifecycle FSM** (closed enum):
 
@@ -129,6 +130,8 @@ This repo does not own:
 - Adapter capabilities are explicit typed records, not stringly flags.
 - Fixture-only terminal endpoints cannot claim real terminal delivery.
 - The daemon accepts length-prefixed `signal-persona-harness` frames.
+- The daemon applies the managed spawn-envelope socket mode to `harness.sock`
+  before accepting client traffic.
 - The daemon answers `HarnessStatusQuery` with typed health and readiness.
 - The daemon returns `HarnessRequestUnimplemented` for valid contract
   operations that are not built yet.
@@ -153,6 +156,7 @@ tests/            harness smoke and actor-runtime constraint tests
 | Harness identity projection keeps full, redacted, and hidden views distinct. | `nix flake check .#harness-identity-projection-views` |
 | Harness identity projection cannot collapse back to one always-full record. | `nix flake check .#harness-identity-projection-source-constraint` |
 | Fixture-only human terminal endpoints cannot claim production delivery. | `nix flake check .#terminal-fixture-endpoint-not-production-delivery` |
+| Harness daemon applies the managed spawn-envelope socket mode. | `nix flake check .#harness-daemon-applies-spawn-envelope-socket-mode` |
 | Harness daemon answers status/readiness through its Signal boundary. | `nix flake check .#harness-daemon-answers-status-readiness` |
 | Harness daemon returns typed unimplemented for valid unfinished requests. | `nix flake check .#harness-daemon-returns-typed-unimplemented` |
 

@@ -101,6 +101,8 @@
           terminal-fixture-endpoint-not-production-delivery = context.cargoTest
             "actor_runtime_truth"
             "fixture_human_endpoint_cannot_be_production_delivery";
+          harness-daemon-applies-spawn-envelope-socket-mode =
+            context.cargoTest "daemon" "harness_daemon_applies_spawn_envelope_socket_mode";
           harness-daemon-answers-status-readiness =
             context.cargoTest "daemon" "harness_daemon_answers_status_readiness";
           harness-daemon-returns-typed-unimplemented =
