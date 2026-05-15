@@ -88,10 +88,10 @@ lifecycle state, and its transcript event count.
 
 Harness identity views are read-path projections: `Full`, `Redacted`, or
 `Hidden`. The current code names the local view selector
-`HarnessIdentityView`. It is not an authorization gate. Designer/127 keeps
-raw transcript access behind explicit later range queries and closes
-`HarnessKind`; designer/125 puts runtime permission in filesystem ACLs plus
-router channel state choreographed by mind.
+`HarnessIdentityView`. It is not an authorization gate. Raw transcript
+access stays behind explicit later range queries; `HarnessKind` is a
+closed enum. Runtime permission lives in filesystem ACLs plus router
+channel state choreographed by mind.
 
 When durable harness history is needed, the harness actor opens its **own**
 redb file (e.g. `harness.redb`) through a harness-owned Sema layer over the
