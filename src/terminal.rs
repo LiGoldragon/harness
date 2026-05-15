@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use persona_terminal::contract::TerminalTransportBinding;
 use signal_persona_terminal::{
-    TerminalCapture, TerminalReply, TerminalInput, TerminalInputBytes, TerminalName,
+    TerminalCapture, TerminalInput, TerminalInputBytes, TerminalName, TerminalReply,
     TerminalRequest,
 };
 
