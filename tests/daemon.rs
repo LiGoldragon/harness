@@ -9,7 +9,10 @@ use std::time::{Duration, Instant};
 use persona_harness::{
     HarnessCommandLine, HarnessDaemon, HarnessFrameCodec, SocketMode, SupervisionFrameCodec,
 };
-use signal_core::{FrameBody, Reply, Request, SignalVerb};
+use signal_core::{
+    ExchangeIdentifier, ExchangeLane, ExchangeSequence, FrameBody, NonEmpty, Operation, Reply,
+    Request, RequestRejectionReason, SessionEpoch, SignalVerb, SubReply,
+};
 use signal_persona::{
     ComponentHealth, ComponentHealthQuery, ComponentHello, ComponentKind, ComponentName,
     ComponentReadinessQuery, SupervisionFrame, SupervisionProtocolVersion, SupervisionReply,
@@ -81,19 +84,31 @@ fn harness_command_line_requires_socket_path() {
 
 #[test]
 fn harness_frame_codec_rejects_mismatched_signal_verb() {
-    let frame = HarnessFrame::new(FrameBody::Request(Request::unchecked_operation(
+    let request = Request::from_operations(NonEmpty::single(Operation::new(
         SignalVerb::Assert,
         HarnessRequest::HarnessStatusQuery(HarnessStatusQuery {
             harness: HarnessName::new("operator"),
         }),
     )));
+    let frame = HarnessFrame::new(FrameBody::Request {
+        exchange: test_exchange(),
+        request,
+    });
     let bytes = frame.encode_length_prefixed().expect("frame encodes");
     let mut input = bytes.as_slice();
     let error = HarnessFrameCodec::default()
         .read_request(&mut input)
         .expect_err("mismatched verb is rejected");
 
-    assert!(error.to_string().contains("signal verb mismatch"));
+    match error {
+        persona_harness::Error::InvalidSignalRequest { reason } => {
+            assert_eq!(
+                reason,
+                RequestRejectionReason::VerbPayloadMismatch { index: 0 }
+            );
+        }
+        other => panic!("expected typed signal request rejection, got {other:?}"),
+    }
 }
 
 #[test]
@@ -231,14 +246,20 @@ fn harness_daemon_returns_typed_unimplemented() {
 }
 
 fn write_request(stream: &mut UnixStream, request: HarnessRequest) {
-    let frame = HarnessFrame::new(FrameBody::Request(Request::from_payload(request)));
+    let frame = HarnessFrame::new(FrameBody::Request {
+        exchange: test_exchange(),
+        request: Request::from_payload(request),
+    });
     let bytes = frame.encode_length_prefixed().expect("request encodes");
     stream.write_all(&bytes).expect("request writes");
     stream.flush().expect("request flushes");
 }
 
 fn write_supervision_request(stream: &mut UnixStream, request: SupervisionRequest) {
-    let frame = SupervisionFrame::new(FrameBody::Request(Request::from_payload(request)));
+    let frame = SupervisionFrame::new(FrameBody::Request {
+        exchange: test_exchange(),
+        request: Request::from_payload(request),
+    });
     let bytes = frame
         .encode_length_prefixed()
         .expect("supervision request encodes");
@@ -269,9 +290,23 @@ fn read_event(stream: &mut UnixStream) -> HarnessEvent {
         .read_frame(stream)
         .expect("event frame reads");
     match frame.into_body() {
-        FrameBody::Reply(Reply::Operation(event)) => event,
+        FrameBody::Reply { reply, .. } => match reply {
+            Reply::Accepted { per_operation, .. } => match per_operation.into_head() {
+                SubReply::Ok { payload, .. } => payload,
+                other => panic!("expected ok harness sub-reply, got {other:?}"),
+            },
+            Reply::Rejected { reason } => panic!("expected harness event reply, got {reason:?}"),
+        },
         other => panic!("expected harness event reply, got {other:?}"),
     }
+}
+
+fn test_exchange() -> ExchangeIdentifier {
+    ExchangeIdentifier::new(
+        SessionEpoch::new(0),
+        ExchangeLane::Connector,
+        ExchangeSequence::first(),
+    )
 }
 
 fn unique_nanos() -> u128 {

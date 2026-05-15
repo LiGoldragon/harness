@@ -5,7 +5,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 
 use kameo::actor::ActorRef;
-use signal_core::{FrameBody, Reply};
+use signal_core::{ExchangeIdentifier, FrameBody, NonEmpty, Reply, SignalVerb, SubReply};
 use signal_persona_harness::{
     Frame as HarnessFrame, HarnessEvent, HarnessHealth, HarnessName, HarnessReadiness,
     HarnessRequest, HarnessRequestUnimplemented, HarnessStatus, HarnessStatusQuery,
@@ -126,10 +126,10 @@ impl HarnessDaemon {
         let request = connection.read_signal_request()?;
         let event = runtime.block_on(async {
             HarnessRequestHandler::new(harness.clone())
-                .event_for_request(request)
+                .event_for_request(request.request)
                 .await
         })?;
-        connection.write_signal_event(event.clone())?;
+        connection.write_signal_event(request.exchange, request.verb, event.clone())?;
         Ok(event)
     }
 }
@@ -197,14 +197,26 @@ impl HarnessConnection {
         }
     }
 
-    pub fn read_signal_request(&mut self) -> Result<HarnessRequest> {
+    pub fn read_signal_request(&mut self) -> Result<ReceivedHarnessRequest> {
         self.signal.read_request(&mut self.stream)
     }
 
-    pub fn write_signal_event(&mut self, event: HarnessEvent) -> Result<()> {
+    pub fn write_signal_event(
+        &mut self,
+        exchange: ExchangeIdentifier,
+        verb: SignalVerb,
+        event: HarnessEvent,
+    ) -> Result<()> {
         let stream = self.stream.get_mut();
-        self.signal.write_event(stream, event)
+        self.signal.write_event(stream, exchange, verb, event)
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReceivedHarnessRequest {
+    exchange: ExchangeIdentifier,
+    verb: SignalVerb,
+    request: HarnessRequest,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -235,14 +247,18 @@ impl HarnessFrameCodec {
         Ok(HarnessFrame::decode_length_prefixed(&bytes)?)
     }
 
-    pub fn read_request(&self, reader: &mut impl Read) -> Result<HarnessRequest> {
+    pub fn read_request(&self, reader: &mut impl Read) -> Result<ReceivedHarnessRequest> {
         match self.read_frame(reader)?.into_body() {
-            FrameBody::Request(request) => {
-                request
-                    .into_payload_checked()
-                    .map_err(|error| Error::UnexpectedSignalFrame {
-                        got: error.to_string(),
-                    })
+            FrameBody::Request { exchange, request } => {
+                let checked = request
+                    .into_checked()
+                    .map_err(|(reason, _)| Error::InvalidSignalRequest { reason })?;
+                let operation = checked.operations.into_head();
+                Ok(ReceivedHarnessRequest {
+                    exchange,
+                    verb: operation.verb,
+                    request: operation.payload,
+                })
             }
             other => Err(Error::UnexpectedSignalFrame {
                 got: format!("{other:?}"),
@@ -250,8 +266,20 @@ impl HarnessFrameCodec {
         }
     }
 
-    pub fn write_event(&self, writer: &mut impl Write, event: HarnessEvent) -> Result<()> {
-        let frame = HarnessFrame::new(FrameBody::Reply(Reply::operation(event)));
+    pub fn write_event(
+        &self,
+        writer: &mut impl Write,
+        exchange: ExchangeIdentifier,
+        verb: SignalVerb,
+        event: HarnessEvent,
+    ) -> Result<()> {
+        let frame = HarnessFrame::new(FrameBody::Reply {
+            exchange,
+            reply: Reply::completed(NonEmpty::single(SubReply::Ok {
+                verb,
+                payload: event,
+            })),
+        });
         let bytes = frame.encode_length_prefixed()?;
         writer.write_all(&bytes)?;
         writer.flush()?;

@@ -20,6 +20,11 @@ pub enum Error {
     #[error("unexpected signal frame: {got}")]
     UnexpectedSignalFrame { got: String },
 
+    #[error("signal request failed structural checks: {reason}")]
+    InvalidSignalRequest {
+        reason: signal_core::RequestRejectionReason,
+    },
+
     #[error("terminal transport failed: {0}")]
     TerminalTransport(#[from] persona_terminal::Error),
 }
