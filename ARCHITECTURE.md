@@ -3,12 +3,13 @@
 *Harness identity, lifecycle, transcript, and adapter contracts.*
 
 `persona-harness` models interactive AI harnesses as addressable runtime
-objects. Codex, Claude, and Pi are closed schema variants; later production
-harnesses become explicit variants, not `Other { name }` string payloads.
-Harnesses carry lifecycle state, typed transcript observations, sequence
-pointers, and delivery capabilities. The Persona-facing terminal contract is
-`signal-persona-terminal`; terminal transport execution is delegated to
-`persona-terminal`.
+objects. `HarnessKind` is the closed schema of harness kinds — production
+variants `Codex`, `Claude`, `Pi`, and the explicit `Fixture` variant for
+test fixtures. Later production harnesses become explicit variants, not
+`Other { name }` string payloads. Harnesses carry lifecycle state, typed
+transcript observations, sequence pointers, and delivery capabilities. The
+Persona-facing terminal contract is `signal-persona-terminal`; terminal
+transport execution is delegated to `persona-terminal`.
 
 > **Scope.** Any "sema" reference here means today's `sema` library
 > (rename pending → `sema-db`). The eventual `Sema` is broader;
@@ -58,6 +59,11 @@ canonical `SupervisionPhase` Kameo actor. The daemon reads its
 `signal-persona::SpawnEnvelope` at startup, binds `harness.sock` at
 mode 0600 by applying the `PERSONA_SOCKET_MODE` value from the Persona spawn
 envelope, and proceeds.
+
+The daemon takes its `HarnessKind` from `--kind <codex|claude|pi|fixture>`
+on argv. When `--kind` is omitted, the daemon defaults to `Fixture` so a
+mis-launched production daemon cannot silently impersonate a real harness
+kind. Production callers must pass `--kind` explicitly.
 
 **Harness lifecycle FSM** (closed enum):
 
@@ -162,6 +168,11 @@ tests/            harness smoke and actor-runtime constraint tests
 | Harness identity projection keeps full, redacted, and hidden views distinct. | `nix flake check .#harness-identity-projection-views` |
 | Harness identity projection cannot collapse back to one always-full record. | `nix flake check .#harness-identity-projection-source-constraint` |
 | Fixture-only human terminal endpoints cannot claim production delivery. | `nix flake check .#terminal-fixture-endpoint-not-production-delivery` |
+| `HarnessKind` has exactly four variants and no fifth. | `nix flake check .#harness-kind-includes-all-four-variants` |
+| `--kind` argument values round-trip through the typed parser. | `nix flake check .#harness-kind-argument-value-round-trips` |
+| Harness daemon accepts `--kind` from CLI as a typed argument. | `nix flake check .#harness-command-line-accepts-typed-kind` |
+| Harness daemon defaults to `HarnessKind::Fixture` when `--kind` is omitted. | `nix flake check .#harness-command-line-defaults-kind-to-fixture` |
+| Harness daemon rejects unknown `--kind` values with a typed diagnostic. | `nix flake check .#harness-command-line-rejects-unknown-kind` |
 | Harness daemon applies the managed spawn-envelope socket mode. | `nix flake check .#harness-daemon-applies-spawn-envelope-socket-mode` |
 | Harness daemon delivers message bytes to a configured terminal endpoint. | `nix flake check .#harness-daemon-delivers-message-to-terminal-endpoint` |
 | Harness daemon rejects message delivery without a terminal endpoint. | `nix flake check .#harness-daemon-rejects-message-delivery-without-terminal-endpoint` |

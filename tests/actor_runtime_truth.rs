@@ -143,8 +143,65 @@ fn harness_kind_is_closed_schema_enum() {
     assert!(source.contains("Codex,"));
     assert!(source.contains("Claude,"));
     assert!(source.contains("Pi,"));
+    assert!(source.contains("Fixture,"));
     assert!(!source.contains("Other {"));
     assert!(!source.contains("name: String"));
+}
+
+/// Witnesses that `HarnessKind` has exactly the four variants the
+/// architecture commits to — `Codex`, `Claude`, `Pi`, `Fixture` — and
+/// no fifth variant. The exhaustive `match` body forces every variant
+/// to be observed; the assertion that each variant is hit at most once
+/// confirms the closed set.
+#[test]
+fn harness_kind_includes_all_four_variants() {
+    use std::collections::HashSet;
+
+    let kinds = [
+        HarnessKind::Codex,
+        HarnessKind::Claude,
+        HarnessKind::Pi,
+        HarnessKind::Fixture,
+    ];
+
+    let mut observed: HashSet<&'static str> = HashSet::new();
+    for kind in kinds {
+        let label = match kind {
+            HarnessKind::Codex => "Codex",
+            HarnessKind::Claude => "Claude",
+            HarnessKind::Pi => "Pi",
+            HarnessKind::Fixture => "Fixture",
+        };
+        assert!(observed.insert(label), "variant `{label}` covered twice");
+    }
+
+    assert_eq!(observed.len(), 4);
+}
+
+/// Witnesses that the `--kind` argument value spellings round-trip
+/// through `HarnessKind::from_argument_value` and
+/// `HarnessKind::as_argument_value`, and that no spelling resolves to
+/// the wrong variant. This protects the CLI surface from silent drift
+/// (e.g. someone renames `Fixture` and forgets the lowercased token).
+#[test]
+fn harness_kind_argument_value_round_trips() {
+    for kind in [
+        HarnessKind::Codex,
+        HarnessKind::Claude,
+        HarnessKind::Pi,
+        HarnessKind::Fixture,
+    ] {
+        let spelling = kind.as_argument_value();
+        assert_eq!(
+            HarnessKind::from_argument_value(spelling),
+            Some(kind.clone()),
+            "argument value `{spelling}` does not round-trip to {kind:?}",
+        );
+    }
+
+    assert_eq!(HarnessKind::from_argument_value("Pi"), None);
+    assert_eq!(HarnessKind::from_argument_value(""), None);
+    assert_eq!(HarnessKind::from_argument_value("unknown"), None);
 }
 
 #[test]

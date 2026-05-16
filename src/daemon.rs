@@ -24,6 +24,7 @@ use crate::{
 pub struct HarnessDaemon {
     socket: PathBuf,
     harness: HarnessName,
+    kind: HarnessKind,
     socket_mode: Option<SocketMode>,
     terminal_endpoint: Option<HarnessTerminalEndpoint>,
 }
@@ -33,6 +34,7 @@ impl HarnessDaemon {
         Self {
             socket: socket.into(),
             harness: HarnessName::new("harness"),
+            kind: HarnessKind::Fixture,
             socket_mode: SocketMode::from_environment(),
             terminal_endpoint: Self::terminal_endpoint_from_environment(),
         }
@@ -40,6 +42,11 @@ impl HarnessDaemon {
 
     pub fn with_harness(mut self, harness: HarnessName) -> Self {
         self.harness = harness;
+        self
+    }
+
+    pub fn with_kind(mut self, kind: HarnessKind) -> Self {
+        self.kind = kind;
         self
     }
 
@@ -59,6 +66,10 @@ impl HarnessDaemon {
 
     pub fn harness(&self) -> &HarnessName {
         &self.harness
+    }
+
+    pub fn kind(&self) -> &HarnessKind {
+        &self.kind
     }
 
     pub fn run(self) -> Result<()> {
@@ -120,7 +131,7 @@ impl HarnessDaemon {
     fn binding(&self) -> HarnessBinding {
         HarnessBinding::new(
             HarnessId::new(self.harness.as_str()),
-            HarnessKind::Pi,
+            self.kind.clone(),
             std::env::current_dir()
                 .map(|path| path.display().to_string())
                 .unwrap_or_else(|_| ".".to_string()),
@@ -476,6 +487,7 @@ struct HarnessDaemonArguments<'arguments> {
     index: usize,
     socket: Option<PathBuf>,
     harness: Option<HarnessName>,
+    kind: Option<HarnessKind>,
     terminal_socket: Option<PathBuf>,
 }
 
@@ -486,6 +498,7 @@ impl<'arguments> HarnessDaemonArguments<'arguments> {
             index: 0,
             socket: None,
             harness: None,
+            kind: None,
             terminal_socket: None,
         }
     }
@@ -500,6 +513,16 @@ impl<'arguments> HarnessDaemonArguments<'arguments> {
                             .to_string_lossy()
                             .to_string(),
                     ))
+                }
+                "--kind" => {
+                    let value = self.required_value("--kind")?;
+                    let parsed = value.to_string_lossy().to_string();
+                    self.kind =
+                        Some(HarnessKind::from_argument_value(parsed.as_str()).ok_or_else(
+                            || Error::UnexpectedArgument {
+                                got: format!("--kind {parsed} (expected codex|claude|pi|fixture)"),
+                            },
+                        )?);
                 }
                 "--terminal-socket" => {
                     self.terminal_socket =
@@ -527,6 +550,9 @@ impl<'arguments> HarnessDaemonArguments<'arguments> {
             HarnessDaemon::from_socket(self.socket.take().ok_or(Error::MissingSocket)?);
         if let Some(harness) = self.harness.take() {
             daemon = daemon.with_harness(harness);
+        }
+        if let Some(kind) = self.kind.take() {
+            daemon = daemon.with_kind(kind);
         }
         if let Some(terminal_socket) = self.terminal_socket.take() {
             daemon = daemon.with_terminal_socket(terminal_socket);

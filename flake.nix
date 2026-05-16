@@ -98,6 +98,16 @@
             "harness_identity_projection_cannot_leak_everything_by_default";
           harness-kind-closed-schema-enum =
             context.cargoTest "actor_runtime_truth" "harness_kind_is_closed_schema_enum";
+          harness-kind-includes-all-four-variants =
+            context.cargoTest "actor_runtime_truth" "harness_kind_includes_all_four_variants";
+          harness-kind-argument-value-round-trips =
+            context.cargoTest "actor_runtime_truth" "harness_kind_argument_value_round_trips";
+          harness-command-line-accepts-typed-kind =
+            context.cargoTest "daemon" "harness_command_line_accepts_typed_kind_argument";
+          harness-command-line-defaults-kind-to-fixture =
+            context.cargoTest "daemon" "harness_command_line_defaults_kind_to_fixture";
+          harness-command-line-rejects-unknown-kind =
+            context.cargoTest "daemon" "harness_command_line_rejects_unknown_kind";
           terminal-fixture-endpoint-not-production-delivery = context.cargoTest
             "actor_runtime_truth"
             "fixture_human_endpoint_cannot_be_production_delivery";

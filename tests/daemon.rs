@@ -8,7 +8,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use persona_harness::{
-    HarnessCommandLine, HarnessDaemon, HarnessFrameCodec, SocketMode, SupervisionFrameCodec,
+    HarnessCommandLine, HarnessDaemon, HarnessFrameCodec, HarnessKind, SocketMode,
+    SupervisionFrameCodec,
 };
 use signal_core::{
     ExchangeIdentifier, ExchangeLane, LaneSequence, NonEmpty, Operation, Reply, Request,
@@ -142,6 +143,48 @@ fn harness_command_line_requires_socket_path() {
         .expect_err("missing socket is typed");
 
     assert_eq!(error.to_string(), "harness socket path is missing");
+}
+
+#[test]
+fn harness_command_line_accepts_typed_kind_argument() {
+    let daemon = HarnessCommandLine::from_arguments([
+        "--socket",
+        "/tmp/harness.sock",
+        "--harness",
+        "operator",
+        "--kind",
+        "claude",
+    ])
+    .daemon()
+    .expect("typed --kind parses");
+
+    assert_eq!(daemon.kind(), &HarnessKind::Claude);
+}
+
+#[test]
+fn harness_command_line_defaults_kind_to_fixture() {
+    let daemon = HarnessCommandLine::from_arguments(["--socket", "/tmp/harness.sock"])
+        .daemon()
+        .expect("daemon parses without --kind");
+
+    assert_eq!(daemon.kind(), &HarnessKind::Fixture);
+}
+
+#[test]
+fn harness_command_line_rejects_unknown_kind() {
+    let error = HarnessCommandLine::from_arguments([
+        "--socket",
+        "/tmp/harness.sock",
+        "--kind",
+        "operator",
+    ])
+    .daemon()
+    .expect_err("unknown kind is typed-rejected");
+
+    assert!(
+        error.to_string().contains("--kind"),
+        "expected --kind diagnostic, got: {error}",
+    );
 }
 
 #[test]
