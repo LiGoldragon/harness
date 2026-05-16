@@ -174,6 +174,7 @@ tests/            harness smoke and actor-runtime constraint tests
 | Harness daemon defaults to `HarnessKind::Fixture` when `--kind` is omitted. | `nix flake check .#harness-command-line-defaults-kind-to-fixture` |
 | Harness daemon rejects unknown `--kind` values with a typed diagnostic. | `nix flake check .#harness-command-line-rejects-unknown-kind` |
 | Harness daemon applies the managed spawn-envelope socket mode. | `nix flake check .#harness-daemon-applies-spawn-envelope-socket-mode` |
+| Harness daemon flows distinctive socket modes through to both the domain and supervision sockets. | `nix flake check .#harness-daemon-applies-distinctive-spawn-envelope-socket-modes` |
 | Harness daemon delivers message bytes to a configured terminal endpoint. | `nix flake check .#harness-daemon-delivers-message-to-terminal-endpoint` |
 | Harness daemon rejects message delivery without a terminal endpoint. | `nix flake check .#harness-daemon-rejects-message-delivery-without-terminal-endpoint` |
 | Harness daemon answers status/readiness through its Signal boundary. | `nix flake check .#harness-daemon-answers-status-readiness` |

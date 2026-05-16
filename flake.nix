@@ -113,6 +113,8 @@
             "fixture_human_endpoint_cannot_be_production_delivery";
           harness-daemon-applies-spawn-envelope-socket-mode =
             context.cargoTest "daemon" "harness_daemon_applies_spawn_envelope_socket_mode";
+          harness-daemon-applies-distinctive-spawn-envelope-socket-modes = context.cargoTest "daemon"
+            "harness_daemon_applies_distinctive_spawn_envelope_socket_modes";
           harness-daemon-answers-status-readiness =
             context.cargoTest "daemon" "harness_daemon_answers_status_readiness";
           harness-daemon-delivers-message-to-terminal-endpoint =

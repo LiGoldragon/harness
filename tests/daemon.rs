@@ -327,6 +327,55 @@ fn harness_daemon_answers_status_readiness() {
     assert_eq!(server_event, expected);
 }
 
+/// Witnesses that the spawn-envelope socket-mode env vars flow through to
+/// both the domain harness socket *and* the supervision socket as chmod
+/// calls — not as hardcoded constants. Uses distinctive non-default modes
+/// (`0o640` and `0o660`) so a regression that pins either chmod to a
+/// fixed value fails this assertion.
+///
+/// Closes the witness gap recorded in
+/// `~/primary/reports/designer/188-persona-harness-gap-scan.md` §11.4 and
+/// §9 (the "MISSING: Daemon applies spawn-envelope socket mode" row of
+/// the constraint-test table) for the supervision socket specifically.
+#[test]
+fn harness_daemon_applies_distinctive_spawn_envelope_socket_modes() {
+    let fixture = SocketFixture::new("distinctive-socket-modes");
+    let supervision_socket = fixture.supervision_socket();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_persona-harness-daemon"))
+        .arg(fixture.socket())
+        .arg("operator")
+        .env("PERSONA_SOCKET_MODE", "640")
+        .env("PERSONA_SUPERVISION_SOCKET_PATH", &supervision_socket)
+        .env("PERSONA_SUPERVISION_SOCKET_MODE", "660")
+        .spawn()
+        .expect("persona-harness-daemon starts");
+
+    wait_for_socket(fixture.socket());
+    wait_for_socket(&supervision_socket);
+
+    let domain_mode = std::fs::metadata(fixture.socket())
+        .expect("domain socket metadata is readable")
+        .permissions()
+        .mode()
+        & 0o777;
+    let supervision_mode = std::fs::metadata(&supervision_socket)
+        .expect("supervision socket metadata is readable")
+        .permissions()
+        .mode()
+        & 0o777;
+
+    stop_child(&mut child);
+
+    assert_eq!(
+        domain_mode, 0o640,
+        "domain socket mode did not pick up PERSONA_SOCKET_MODE=640",
+    );
+    assert_eq!(
+        supervision_mode, 0o660,
+        "supervision socket mode did not pick up PERSONA_SUPERVISION_SOCKET_MODE=660",
+    );
+}
+
 #[test]
 fn harness_daemon_answers_component_supervision_relation() {
     let fixture = SocketFixture::new("component-supervision");
