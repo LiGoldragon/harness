@@ -517,12 +517,13 @@ impl<'arguments> HarnessDaemonArguments<'arguments> {
                 "--kind" => {
                     let value = self.required_value("--kind")?;
                     let parsed = value.to_string_lossy().to_string();
-                    self.kind =
-                        Some(HarnessKind::from_argument_value(parsed.as_str()).ok_or_else(
-                            || Error::UnexpectedArgument {
+                    self.kind = Some(
+                        HarnessKind::from_argument_value(parsed.as_str()).ok_or_else(|| {
+                            Error::UnexpectedArgument {
                                 got: format!("--kind {parsed} (expected codex|claude|pi|fixture)"),
-                            },
-                        )?);
+                            }
+                        })?,
+                    );
                 }
                 "--terminal-socket" => {
                     self.terminal_socket =

@@ -172,14 +172,10 @@ fn harness_command_line_defaults_kind_to_fixture() {
 
 #[test]
 fn harness_command_line_rejects_unknown_kind() {
-    let error = HarnessCommandLine::from_arguments([
-        "--socket",
-        "/tmp/harness.sock",
-        "--kind",
-        "operator",
-    ])
-    .daemon()
-    .expect_err("unknown kind is typed-rejected");
+    let error =
+        HarnessCommandLine::from_arguments(["--socket", "/tmp/harness.sock", "--kind", "operator"])
+            .daemon()
+            .expect_err("unknown kind is typed-rejected");
 
     assert!(
         error.to_string().contains("--kind"),
