@@ -784,7 +784,7 @@ checksum = "dc6fe69c597f9c37bfeeeeeb33da3530379845f10be461a66d16d03eca2ded77"
 [[package]]
 name = "signal-core"
 version = "0.1.0"
-source = "git+https://github.com/LiGoldragon/signal-core.git#dd12794276ce48cc41dcceb97416476e54421f50"
+source = "git+https://github.com/LiGoldragon/signal-core.git#25212c0d2a3f6403e8131d8db4b810e14fdd826b"
 dependencies = [
  "nota-codec",
  "rkyv",
@@ -795,7 +795,7 @@ dependencies = [
 [[package]]
 name = "signal-core-macros"
 version = "0.1.0"
-source = "git+https://github.com/LiGoldragon/signal-core.git#dd12794276ce48cc41dcceb97416476e54421f50"
+source = "git+https://github.com/LiGoldragon/signal-core.git#25212c0d2a3f6403e8131d8db4b810e14fdd826b"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -857,7 +857,7 @@ dependencies = [
 [[package]]
 name = "signal-persona-harness"
 version = "0.1.0"
-source = "git+https://github.com/LiGoldragon/signal-persona-harness.git?branch=main#4a873504a6b3aa24b02d83f9ce0e355e51423663"
+source = "git+https://github.com/LiGoldragon/signal-persona-harness.git?branch=main#380d91bd12987a671d18d1a959d9d0a1d9dbb8e6"
 dependencies = [
  "nota-codec",
  "rkyv",

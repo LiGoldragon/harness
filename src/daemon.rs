@@ -435,6 +435,8 @@ impl HarnessRequestHandler {
             HarnessRequest::InteractionPrompt(payload) => payload.harness.clone(),
             HarnessRequest::DeliveryCancellation(payload) => payload.harness.clone(),
             HarnessRequest::HarnessStatusQuery(payload) => payload.harness.clone(),
+            HarnessRequest::SubscribeHarnessTranscript(payload) => payload.harness.clone(),
+            HarnessRequest::HarnessTranscriptRetraction(token) => token.harness.clone(),
         }
     }
 }
