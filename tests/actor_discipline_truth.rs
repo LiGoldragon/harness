@@ -51,10 +51,8 @@ fn actor_source_does_not_share_locks_between_actors() {
     let mut violations: Vec<String> = Vec::new();
     for path in production_source_files() {
         let text = fs::read_to_string(&path).expect("read source file");
-        let is_subscription_source = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            == Some("subscription.rs");
+        let is_subscription_source =
+            path.file_name().and_then(|name| name.to_str()) == Some("subscription.rs");
         for (fragment, reason) in forbidden {
             for (index, line) in text.lines().enumerate() {
                 if !line.contains(fragment) {

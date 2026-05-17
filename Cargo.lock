@@ -488,16 +488,19 @@ dependencies = [
 [[package]]
 name = "persona-terminal"
 version = "0.1.0"
-source = "git+https://github.com/LiGoldragon/persona-terminal.git?branch=main#83d28d3130e7c4fe0a31e644a8813ad67506911c"
+source = "git+https://github.com/LiGoldragon/persona-terminal.git?branch=main#1bc8f7a0cdbd22516c4c0b254af3f28cfe9106d2"
 dependencies = [
  "crossterm",
  "kameo",
+ "nota-codec",
+ "nota-config",
  "regex",
  "rkyv",
  "sema",
  "signal-core",
  "signal-hook",
  "signal-persona",
+ "signal-persona-auth",
  "signal-persona-terminal",
  "terminal-cell",
  "thiserror 2.0.18",
@@ -849,7 +852,7 @@ dependencies = [
 [[package]]
 name = "signal-persona"
 version = "0.1.0"
-source = "git+https://github.com/LiGoldragon/signal-persona.git#e72aa75451ceecac4c2e92efa541cb0312428707"
+source = "git+https://github.com/LiGoldragon/signal-persona.git#6737668708f54a3c95ae11c0dae27a2bc89b5628"
 dependencies = [
  "nota-codec",
  "rkyv",
@@ -860,7 +863,7 @@ dependencies = [
 [[package]]
 name = "signal-persona-auth"
 version = "0.1.0"
-source = "git+https://github.com/LiGoldragon/signal-persona-auth.git#3d84d024bc1d404c36c3a5ceced4927289c3ee94"
+source = "git+https://github.com/LiGoldragon/signal-persona-auth.git#ad999f9f970b6c20a9b0a6d792ec4bc9329d5c61"
 dependencies = [
  "nota-codec",
  "rkyv",
@@ -884,11 +887,14 @@ dependencies = [
 [[package]]
 name = "signal-persona-terminal"
 version = "0.1.0"
-source = "git+https://github.com/LiGoldragon/signal-persona-terminal.git?branch=main#0b142b46a1f30ba105b14515860a11dc91607601"
+source = "git+https://github.com/LiGoldragon/signal-persona-terminal.git?branch=main#a44a0903c14c66efae5d5ce69d528f836e1f1d9f"
 dependencies = [
  "nota-codec",
+ "nota-config",
  "rkyv",
  "signal-core",
+ "signal-persona",
+ "signal-persona-auth",
  "thiserror 2.0.18",
 ]
 
@@ -924,7 +930,7 @@ dependencies = [
 [[package]]
 name = "terminal-cell"
 version = "0.1.0"
-source = "git+https://github.com/LiGoldragon/terminal-cell.git?branch=main#f87d1da3a2a4feb9453a2c1ba3c8463f26713412"
+source = "git+https://github.com/LiGoldragon/terminal-cell.git?branch=main#549467998e05a5c136165bad7c77a2b8e9974209"
 dependencies = [
  "crossterm",
  "kameo",

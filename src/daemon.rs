@@ -9,8 +9,8 @@ use signal_core::{ExchangeIdentifier, NonEmpty, Reply, SignalVerb, SubReply};
 use signal_persona_harness::{
     DeliveryCompleted, DeliveryFailed, DeliveryFailureReason, HarnessDaemonConfiguration,
     HarnessEvent, HarnessFrame, HarnessFrameBody as FrameBody, HarnessHealth, HarnessName,
-    HarnessReadiness, HarnessRequest, HarnessRequestUnimplemented, HarnessStatus, HarnessStatusQuery,
-    HarnessUnimplementedReason, MessageDelivery,
+    HarnessReadiness, HarnessRequest, HarnessRequestUnimplemented, HarnessStatus,
+    HarnessStatusQuery, HarnessUnimplementedReason, MessageDelivery,
 };
 
 use crate::{
@@ -38,9 +38,7 @@ impl HarnessDaemon {
         let supervision = SupervisionListener::new(
             SupervisionProfile::harness(),
             PathBuf::from(configuration.supervision_socket_path.as_str()),
-            SupervisionSocketMode::from_octal(
-                configuration.supervision_socket_mode.into_u32(),
-            ),
+            SupervisionSocketMode::from_octal(configuration.supervision_socket_mode.into_u32()),
         );
         let terminal_endpoint = configuration
             .terminal_socket_path

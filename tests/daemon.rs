@@ -1,4 +1,4 @@
-use std::io::{Read, Write};
+use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
@@ -11,6 +11,7 @@ use persona_harness::{
     HarnessCommandLine, HarnessDaemon, HarnessFrameCodec, HarnessKind, SocketMode,
     SupervisionFrameCodec,
 };
+use persona_terminal::supervisor::TerminalSupervisorFrameCodec;
 use signal_core::{
     ExchangeIdentifier, ExchangeLane, LaneSequence, NonEmpty, Operation, Reply, Request,
     RequestRejectionReason, SessionEpoch, SignalVerb, SubReply,
@@ -26,6 +27,9 @@ use signal_persona_harness::{
     HarnessRequest, HarnessRequestUnimplemented, HarnessStatus, HarnessStatusQuery,
     HarnessUnimplementedReason, InteractionPrompt, MessageBody, MessageDelivery, MessageSender,
     MessageSlot,
+};
+use signal_persona_terminal::{
+    TerminalGeneration, TerminalInputAccepted, TerminalReply, TerminalRequest,
 };
 
 struct SocketFixture {
@@ -76,25 +80,27 @@ impl TerminalAcceptanceSocket {
         let (sender, received) = channel();
         thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("terminal socket accepts input");
-            let mut request_kind = [0_u8; 1];
-            stream
-                .read_exact(&mut request_kind)
-                .expect("terminal socket reads request kind");
-            assert_eq!(request_kind[0], b'P');
-            let mut length = [0_u8; 8];
-            stream
-                .read_exact(&mut length)
-                .expect("terminal socket reads input length");
-            let byte_count = u64::from_be_bytes(length) as usize;
-            let mut bytes = vec![0_u8; byte_count];
-            stream
-                .read_exact(bytes.as_mut_slice())
-                .expect("terminal socket reads input bytes");
-            sender.send(bytes).expect("terminal socket reports bytes");
-            stream
-                .write_all(b"A")
-                .expect("terminal socket writes acceptance");
-            stream.flush().expect("terminal socket flushes acceptance");
+            let codec = TerminalSupervisorFrameCodec::default();
+            let request = codec
+                .read_request(&mut stream)
+                .expect("terminal socket reads Signal input request");
+            match request {
+                TerminalRequest::TerminalInput(input) => {
+                    sender
+                        .send(input.bytes.as_slice().to_vec())
+                        .expect("terminal socket reports bytes");
+                    codec
+                        .write_reply(
+                            &mut stream,
+                            TerminalReply::TerminalInputAccepted(TerminalInputAccepted {
+                                terminal: input.terminal,
+                                generation: TerminalGeneration::new(1),
+                            }),
+                        )
+                        .expect("terminal socket writes Signal acceptance");
+                }
+                other => panic!("expected TerminalInput request, got {other:?}"),
+            }
         });
         Self { path, received }
     }
