@@ -16,10 +16,16 @@ use signal_core::{
     ExchangeIdentifier, ExchangeLane, LaneSequence, NonEmpty, Operation, Reply, Request,
     RequestRejectionReason, SessionEpoch, SignalVerb, SubReply,
 };
+use signal_frame::{
+    ExchangeIdentifier as FrameExchangeIdentifier, ExchangeLane as FrameExchangeLane,
+    LaneSequence as FrameLaneSequence, Request as FrameRequest, SessionEpoch as FrameSessionEpoch,
+};
+use signal_persona::engine_management::{
+    Frame as SupervisionFrame, FrameBody as SupervisionFrameBody, Operation as SupervisionRequest,
+    Query as SupervisionQuery, Reply as SupervisionReply,
+};
 use signal_persona::{
-    ComponentHealth, ComponentHealthQuery, ComponentHello, ComponentKind, ComponentName,
-    ComponentReadinessQuery, SupervisionFrame, SupervisionFrameBody, SupervisionProtocolVersion,
-    SupervisionReply, SupervisionRequest,
+    ComponentHealth, ComponentKind, ComponentName, EngineManagementProtocolVersion, Presence,
 };
 use signal_persona_harness::{
     DeliveryCompleted, DeliveryFailed, DeliveryFailureReason, HarnessEvent, HarnessFrame,
@@ -448,39 +454,39 @@ fn harness_daemon_answers_component_supervision_relation() {
 
     write_supervision_request(
         &mut stream,
-        SupervisionRequest::ComponentHello(ComponentHello {
+        SupervisionRequest::Announce(Presence {
             expected_component: ComponentName::new("persona-harness"),
             expected_kind: ComponentKind::Harness,
-            supervision_protocol_version: SupervisionProtocolVersion::new(1),
+            engine_management_protocol_version: EngineManagementProtocolVersion::new(1),
         }),
     );
     assert!(matches!(
         codec.read_reply(&mut stream).expect("identity reply"),
-        SupervisionReply::ComponentIdentity(identity)
+        SupervisionReply::Identified(identity)
             if identity.name.as_str() == "persona-harness"
                 && identity.kind == ComponentKind::Harness
     ));
 
     write_supervision_request(
         &mut stream,
-        SupervisionRequest::ComponentReadinessQuery(ComponentReadinessQuery {
-            component: ComponentName::new("persona-harness"),
-        }),
+        SupervisionRequest::Query(SupervisionQuery::ReadinessStatus(ComponentName::new(
+            "persona-harness",
+        ))),
     );
     assert!(matches!(
         codec.read_reply(&mut stream).expect("readiness reply"),
-        SupervisionReply::ComponentReady(_)
+        SupervisionReply::Ready(_)
     ));
 
     write_supervision_request(
         &mut stream,
-        SupervisionRequest::ComponentHealthQuery(ComponentHealthQuery {
-            component: ComponentName::new("persona-harness"),
-        }),
+        SupervisionRequest::Query(SupervisionQuery::HealthStatus(ComponentName::new(
+            "persona-harness",
+        ))),
     );
     assert!(matches!(
         codec.read_reply(&mut stream).expect("health reply"),
-        SupervisionReply::ComponentHealthReport(report)
+        SupervisionReply::HealthReport(report)
             if report.health == ComponentHealth::Running
     ));
 
@@ -535,8 +541,8 @@ fn write_request(stream: &mut UnixStream, request: HarnessRequest) {
 
 fn write_supervision_request(stream: &mut UnixStream, request: SupervisionRequest) {
     let frame = SupervisionFrame::new(SupervisionFrameBody::Request {
-        exchange: test_exchange(),
-        request: Request::from_payload(request),
+        exchange: test_supervision_exchange(),
+        request: FrameRequest::from_payload(request),
     });
     let bytes = frame
         .encode_length_prefixed()
@@ -584,6 +590,14 @@ fn test_exchange() -> ExchangeIdentifier {
         SessionEpoch::new(0),
         ExchangeLane::Connector,
         LaneSequence::first(),
+    )
+}
+
+fn test_supervision_exchange() -> FrameExchangeIdentifier {
+    FrameExchangeIdentifier::new(
+        FrameSessionEpoch::new(0),
+        FrameExchangeLane::Connector,
+        FrameLaneSequence::first(),
     )
 }
 
