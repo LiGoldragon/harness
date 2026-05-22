@@ -8,8 +8,8 @@ pub mod terminal;
 pub mod transcript;
 
 pub use daemon::{
-    BoundHarnessDaemon, HarnessCommandLine, HarnessConnection, HarnessDaemon, HarnessFrameCodec,
-    HarnessRequestHandler, SocketMode,
+    BoundHarnessDaemon, HarnessConnection, HarnessDaemon, HarnessFrameCodec, HarnessRequestHandler,
+    SocketMode,
 };
 pub use error::{Error, Result};
 pub use harness::{

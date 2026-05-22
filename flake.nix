@@ -100,14 +100,18 @@
             context.cargoTest "actor_runtime_truth" "harness_kind_is_closed_schema_enum";
           harness-kind-includes-all-four-variants =
             context.cargoTest "actor_runtime_truth" "harness_kind_includes_all_four_variants";
-          harness-kind-argument-value-round-trips =
-            context.cargoTest "actor_runtime_truth" "harness_kind_argument_value_round_trips";
-          harness-command-line-accepts-typed-kind =
-            context.cargoTest "daemon" "harness_command_line_accepts_typed_kind_argument";
-          harness-command-line-defaults-kind-to-fixture =
-            context.cargoTest "daemon" "harness_command_line_defaults_kind_to_fixture";
-          harness-command-line-rejects-unknown-kind =
-            context.cargoTest "daemon" "harness_command_line_rejects_unknown_kind";
+          harness-kind-has-no-command-line-argument-projection = context.cargoTest
+            "actor_runtime_truth"
+            "harness_kind_has_no_command_line_argument_projection";
+          harness-daemon-accepts-fixture-kind-from-single-nota-configuration-argument =
+            context.cargoTest "daemon"
+              "harness_daemon_accepts_fixture_kind_from_single_nota_configuration_argument";
+          harness-daemon-accepts-codex-kind-from-single-nota-configuration-argument =
+            context.cargoTest "daemon"
+              "harness_daemon_accepts_codex_kind_from_single_nota_configuration_argument";
+          harness-daemon-configuration-rejects-multiple-arguments = context.cargoTest
+            "daemon"
+            "harness_daemon_configuration_rejects_multiple_arguments";
           terminal-fixture-endpoint-not-production-delivery = context.cargoTest
             "actor_runtime_truth"
             "fixture_human_endpoint_cannot_be_production_delivery";

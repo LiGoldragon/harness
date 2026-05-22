@@ -11,12 +11,6 @@ pub enum Error {
     #[error("actor call: {0}")]
     ActorCall(String),
 
-    #[error("harness socket path is missing")]
-    MissingSocket,
-
-    #[error("unexpected harness command-line argument: {got}")]
-    UnexpectedArgument { got: String },
-
     #[error("unexpected signal frame: {got}")]
     UnexpectedSignalFrame { got: String },
 

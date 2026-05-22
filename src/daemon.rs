@@ -1,4 +1,3 @@
-use std::ffi::OsString;
 use std::io::{BufReader, Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -60,8 +59,8 @@ impl HarnessDaemon {
             socket: socket.into(),
             harness: HarnessName::new("harness"),
             kind: HarnessKind::Fixture,
-            socket_mode: SocketMode::from_environment(),
-            terminal_endpoint: Self::terminal_endpoint_from_environment(),
+            socket_mode: None,
+            terminal_endpoint: None,
             supervision: None,
         }
     }
@@ -179,12 +178,6 @@ impl HarnessDaemon {
         connection.write_signal_event(request.exchange, request.verb, event.clone())?;
         Ok(event)
     }
-
-    fn terminal_endpoint_from_environment() -> Option<HarnessTerminalEndpoint> {
-        std::env::var_os("PERSONA_HARNESS_TERMINAL_SOCKET")
-            .map(PathBuf::from)
-            .map(HarnessTerminalEndpoint::pty_socket)
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -193,13 +186,6 @@ pub struct SocketMode(u32);
 impl SocketMode {
     pub const fn from_octal(value: u32) -> Self {
         Self(value)
-    }
-
-    pub fn from_environment() -> Option<Self> {
-        std::env::var("PERSONA_SOCKET_MODE")
-            .ok()
-            .and_then(|value| u32::from_str_radix(value.as_str(), 8).ok())
-            .map(Self::from_octal)
     }
 
     pub const fn as_octal(self) -> u32 {
@@ -474,141 +460,5 @@ impl HarnessRequestHandler {
             HarnessRequest::SubscribeHarnessTranscript(payload) => payload.harness.clone(),
             HarnessRequest::HarnessTranscriptRetraction(token) => token.harness.clone(),
         }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HarnessCommandLine {
-    arguments: Vec<OsString>,
-}
-
-impl HarnessCommandLine {
-    pub fn from_environment() -> Self {
-        Self::from_arguments(std::env::args_os().skip(1))
-    }
-
-    pub fn from_arguments<I, S>(arguments: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<OsString>,
-    {
-        Self {
-            arguments: arguments.into_iter().map(Into::into).collect(),
-        }
-    }
-
-    pub fn daemon(&self) -> Result<HarnessDaemon> {
-        let mut arguments = HarnessDaemonArguments::new(&self.arguments);
-        arguments.parse()
-    }
-
-    pub fn run(&self) -> Result<()> {
-        self.daemon()?.run()
-    }
-}
-
-struct HarnessDaemonArguments<'arguments> {
-    arguments: &'arguments [OsString],
-    index: usize,
-    socket: Option<PathBuf>,
-    harness: Option<HarnessName>,
-    kind: Option<HarnessKind>,
-    terminal_socket: Option<PathBuf>,
-}
-
-impl<'arguments> HarnessDaemonArguments<'arguments> {
-    fn new(arguments: &'arguments [OsString]) -> Self {
-        Self {
-            arguments,
-            index: 0,
-            socket: None,
-            harness: None,
-            kind: None,
-            terminal_socket: None,
-        }
-    }
-
-    fn parse(&mut self) -> Result<HarnessDaemon> {
-        while let Some(argument) = self.next() {
-            match argument.to_string_lossy().as_ref() {
-                "--socket" => self.socket = Some(PathBuf::from(self.required_value("--socket")?)),
-                "--harness" => {
-                    self.harness = Some(HarnessName::new(
-                        self.required_value("--harness")?
-                            .to_string_lossy()
-                            .to_string(),
-                    ))
-                }
-                "--kind" => {
-                    let value = self.required_value("--kind")?;
-                    let parsed = value.to_string_lossy().to_string();
-                    self.kind = Some(
-                        HarnessKind::from_argument_value(parsed.as_str()).ok_or_else(|| {
-                            Error::UnexpectedArgument {
-                                got: format!("--kind {parsed} (expected codex|claude|pi|fixture)"),
-                            }
-                        })?,
-                    );
-                }
-                "--terminal-socket" => {
-                    self.terminal_socket =
-                        Some(PathBuf::from(self.required_value("--terminal-socket")?))
-                }
-                _ if self.socket.is_none()
-                    && !CommandLineArgument::new(argument).starts_option() =>
-                {
-                    self.socket = Some(PathBuf::from(argument));
-                }
-                _ if self.harness.is_none()
-                    && !CommandLineArgument::new(argument).starts_option() =>
-                {
-                    self.harness = Some(HarnessName::new(argument.to_string_lossy().to_string()));
-                }
-                other => {
-                    return Err(Error::UnexpectedArgument {
-                        got: other.to_string(),
-                    });
-                }
-            }
-        }
-
-        let mut daemon =
-            HarnessDaemon::from_socket(self.socket.take().ok_or(Error::MissingSocket)?);
-        if let Some(harness) = self.harness.take() {
-            daemon = daemon.with_harness(harness);
-        }
-        if let Some(kind) = self.kind.take() {
-            daemon = daemon.with_kind(kind);
-        }
-        if let Some(terminal_socket) = self.terminal_socket.take() {
-            daemon = daemon.with_terminal_socket(terminal_socket);
-        }
-        Ok(daemon)
-    }
-
-    fn next(&mut self) -> Option<&'arguments OsString> {
-        let argument = self.arguments.get(self.index)?;
-        self.index += 1;
-        Some(argument)
-    }
-
-    fn required_value(&mut self, option: &str) -> Result<&'arguments OsString> {
-        self.next().ok_or_else(|| Error::UnexpectedArgument {
-            got: format!("{option} without value"),
-        })
-    }
-}
-
-struct CommandLineArgument<'argument> {
-    value: &'argument OsString,
-}
-
-impl<'argument> CommandLineArgument<'argument> {
-    fn new(value: &'argument OsString) -> Self {
-        Self { value }
-    }
-
-    fn starts_option(&self) -> bool {
-        self.value.to_string_lossy().starts_with("--")
     }
 }

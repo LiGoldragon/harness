@@ -68,15 +68,16 @@ binding and counts an input as delivered only after
 ## 1.5 · Lifecycle FSM and supervision-relation reception
 
 The harness daemon answers `signal-persona::SupervisionRequest` from a
-canonical `SupervisionPhase` Kameo actor. The daemon reads its
-`signal-persona::SpawnEnvelope` at startup, binds `harness.sock` at
-mode 0600 by applying the `PERSONA_SOCKET_MODE` value from the Persona spawn
-envelope, and proceeds.
+canonical `SupervisionPhase` Kameo actor. The daemon receives exactly one
+startup argument: a `signal_persona_harness::HarnessDaemonConfiguration`
+record supplied as inline NOTA, a `.nota` path, or a signal-encoded `.rkyv`
+path. That record carries the harness socket path and mode, supervision socket
+path and mode, harness name, `HarnessKind`, optional terminal socket, and owner
+identity.
 
-The daemon takes its `HarnessKind` from `--kind <codex|claude|pi|fixture>`
-on argv. When `--kind` is omitted, the daemon defaults to `Fixture` so a
-mis-launched production daemon cannot silently impersonate a real harness
-kind. Production callers must pass `--kind` explicitly.
+`HarnessKind` is not argv state. The daemon takes it from
+`HarnessDaemonConfiguration::harness_kind`, preserving the closed enum while
+keeping process startup inside the workspace single-argument rule.
 
 **Harness lifecycle FSM** (closed enum):
 
@@ -234,10 +235,10 @@ tests/            harness smoke and actor-runtime constraint tests
 | Harness identity projection cannot collapse back to one always-full record. | `nix flake check .#harness-identity-projection-source-constraint` |
 | Fixture-only human terminal endpoints cannot claim production delivery. | `nix flake check .#terminal-fixture-endpoint-not-production-delivery` |
 | `HarnessKind` has exactly four variants and no fifth. | `nix flake check .#harness-kind-includes-all-four-variants` |
-| `--kind` argument values round-trip through the typed parser. | `nix flake check .#harness-kind-argument-value-round-trips` |
-| Harness daemon accepts `--kind` from CLI as a typed argument. | `nix flake check .#harness-command-line-accepts-typed-kind` |
-| Harness daemon defaults to `HarnessKind::Fixture` when `--kind` is omitted. | `nix flake check .#harness-command-line-defaults-kind-to-fixture` |
-| Harness daemon rejects unknown `--kind` values with a typed diagnostic. | `nix flake check .#harness-command-line-rejects-unknown-kind` |
+| `HarnessKind` has no command-line argument projection table. | `nix flake check .#harness-kind-has-no-command-line-argument-projection` |
+| Harness daemon accepts `HarnessKind::Fixture` from a single NOTA configuration argument. | `nix flake check .#harness-daemon-accepts-fixture-kind-from-single-nota-configuration-argument` |
+| Harness daemon accepts `HarnessKind::Codex` from a single NOTA configuration argument. | `nix flake check .#harness-daemon-accepts-codex-kind-from-single-nota-configuration-argument` |
+| Harness daemon rejects multiple configuration arguments before daemon construction. | `nix flake check .#harness-daemon-configuration-rejects-multiple-arguments` |
 | Harness daemon applies the managed spawn-envelope socket mode. | `nix flake check .#harness-daemon-applies-spawn-envelope-socket-mode` |
 | Harness daemon flows distinctive socket modes through to both the domain and supervision sockets. | `nix flake check .#harness-daemon-applies-distinctive-spawn-envelope-socket-modes` |
 | Harness daemon delivers message bytes to a configured terminal endpoint. | `nix flake check .#harness-daemon-delivers-message-to-terminal-endpoint` |

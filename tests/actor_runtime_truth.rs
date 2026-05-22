@@ -178,30 +178,20 @@ fn harness_kind_includes_all_four_variants() {
     assert_eq!(observed.len(), 4);
 }
 
-/// Witnesses that the `--kind` argument value spellings round-trip
-/// through `HarnessKind::from_argument_value` and
-/// `HarnessKind::as_argument_value`, and that no spelling resolves to
-/// the wrong variant. This protects the CLI surface from silent drift
-/// (e.g. someone renames `Fixture` and forgets the lowercased token).
+/// Witnesses that the daemon no longer exposes a kind-specific argv
+/// spelling table. The only production input is the single typed
+/// `HarnessDaemonConfiguration` argument, where `HarnessKind` is a
+/// closed enum field.
 #[test]
-fn harness_kind_argument_value_round_trips() {
-    for kind in [
-        HarnessKind::Codex,
-        HarnessKind::Claude,
-        HarnessKind::Pi,
-        HarnessKind::Fixture,
-    ] {
-        let spelling = kind.as_argument_value();
-        assert_eq!(
-            HarnessKind::from_argument_value(spelling),
-            Some(kind.clone()),
-            "argument value `{spelling}` does not round-trip to {kind:?}",
-        );
-    }
+fn harness_kind_has_no_command_line_argument_projection() {
+    let source = SourceFile::read(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("harness.rs"),
+    );
 
-    assert_eq!(HarnessKind::from_argument_value("Pi"), None);
-    assert_eq!(HarnessKind::from_argument_value(""), None);
-    assert_eq!(HarnessKind::from_argument_value("unknown"), None);
+    assert!(!source.contains("from_argument_value"));
+    assert!(!source.contains("as_argument_value"));
 }
 
 #[test]

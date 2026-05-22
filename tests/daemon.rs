@@ -7,9 +7,9 @@ use std::sync::mpsc::{Receiver, channel};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use nota_config::ConfigurationSource;
 use persona_harness::{
-    HarnessCommandLine, HarnessDaemon, HarnessFrameCodec, HarnessKind, SocketMode,
-    SupervisionFrameCodec,
+    HarnessDaemon, HarnessFrameCodec, HarnessKind, SocketMode, SupervisionFrameCodec,
 };
 use persona_terminal::supervisor::TerminalSupervisorFrameCodec;
 use signal_core::{
@@ -26,13 +26,15 @@ use signal_persona::engine_management::{
 };
 use signal_persona::{
     ComponentHealth, ComponentKind, ComponentName, EngineManagementProtocolVersion, Presence,
+    SocketMode as WireSocketMode, WirePath,
 };
+use signal_persona_auth::{OwnerIdentity, UnixUserId};
 use signal_persona_harness::{
-    DeliveryCompleted, DeliveryFailed, DeliveryFailureReason, HarnessEvent, HarnessFrame,
-    HarnessFrameBody, HarnessHealth, HarnessName, HarnessOperationKind, HarnessReadiness,
-    HarnessRequest, HarnessRequestUnimplemented, HarnessStatus, HarnessStatusQuery,
-    HarnessUnimplementedReason, InteractionPrompt, MessageBody, MessageDelivery, MessageSender,
-    MessageSlot,
+    DeliveryCompleted, DeliveryFailed, DeliveryFailureReason, HarnessDaemonConfiguration,
+    HarnessEvent, HarnessFrame, HarnessFrameBody, HarnessHealth, HarnessName, HarnessOperationKind,
+    HarnessReadiness, HarnessRequest, HarnessRequestUnimplemented, HarnessStatus,
+    HarnessStatusQuery, HarnessUnimplementedReason, InteractionPrompt, MessageBody,
+    MessageDelivery, MessageSender, MessageSlot,
 };
 use signal_persona_terminal::{
     TerminalGeneration, TerminalInputAccepted, TerminalReply, TerminalRequest,
@@ -149,50 +151,56 @@ fn harness_daemon_applies_spawn_envelope_socket_mode() {
 }
 
 #[test]
-fn harness_command_line_requires_socket_path() {
-    let error = HarnessCommandLine::from_arguments(std::iter::empty::<&str>())
-        .daemon()
-        .expect_err("missing socket is typed");
-
-    assert_eq!(error.to_string(), "harness socket path is missing");
-}
-
-#[test]
-fn harness_command_line_accepts_typed_kind_argument() {
-    let daemon = HarnessCommandLine::from_arguments([
-        "--socket",
-        "/tmp/harness.sock",
-        "--harness",
-        "operator",
-        "--kind",
-        "claude",
-    ])
-    .daemon()
-    .expect("typed --kind parses");
-
-    assert_eq!(daemon.kind(), &HarnessKind::Claude);
-}
-
-#[test]
-fn harness_command_line_defaults_kind_to_fixture() {
-    let daemon = HarnessCommandLine::from_arguments(["--socket", "/tmp/harness.sock"])
-        .daemon()
-        .expect("daemon parses without --kind");
+fn harness_daemon_accepts_fixture_kind_from_single_nota_configuration_argument() {
+    let daemon = daemon_from_single_nota_configuration_argument(
+        signal_persona_harness::HarnessKind::Fixture,
+    );
 
     assert_eq!(daemon.kind(), &HarnessKind::Fixture);
 }
 
 #[test]
-fn harness_command_line_rejects_unknown_kind() {
-    let error =
-        HarnessCommandLine::from_arguments(["--socket", "/tmp/harness.sock", "--kind", "operator"])
-            .daemon()
-            .expect_err("unknown kind is typed-rejected");
+fn harness_daemon_accepts_codex_kind_from_single_nota_configuration_argument() {
+    let daemon =
+        daemon_from_single_nota_configuration_argument(signal_persona_harness::HarnessKind::Codex);
 
-    assert!(
-        error.to_string().contains("--kind"),
-        "expected --kind diagnostic, got: {error}",
-    );
+    assert_eq!(daemon.kind(), &HarnessKind::Codex);
+}
+
+#[test]
+fn harness_daemon_configuration_rejects_multiple_arguments() {
+    let error = ConfigurationSource::from_args(["(HarnessDaemonConfiguration)", "extra"])
+        .expect_err("multiple arguments are rejected before daemon construction");
+
+    assert!(matches!(error, nota_config::Error::MultipleArguments(2)));
+}
+
+fn daemon_from_single_nota_configuration_argument(
+    harness_kind: signal_persona_harness::HarnessKind,
+) -> HarnessDaemon {
+    use nota_codec::{Encoder, NotaEncode};
+
+    let configuration = HarnessDaemonConfiguration {
+        harness_socket_path: WirePath::new("/tmp/harness.sock"),
+        harness_socket_mode: WireSocketMode::new(0o600),
+        supervision_socket_path: WirePath::new("/tmp/harness.supervision.sock"),
+        supervision_socket_mode: WireSocketMode::new(0o600),
+        harness_name: HarnessName::new("operator"),
+        harness_kind,
+        terminal_socket_path: None,
+        owner_identity: OwnerIdentity::UnixUser(UnixUserId::new(1000)),
+    };
+    let mut encoder = Encoder::new();
+    configuration
+        .encode(&mut encoder)
+        .expect("configuration encodes");
+    let text = encoder.into_string();
+    let decoded: HarnessDaemonConfiguration = ConfigurationSource::from_args([text.as_str()])
+        .expect("single inline NOTA argument is accepted")
+        .decode()
+        .expect("configuration decodes");
+
+    HarnessDaemon::from_configuration(decoded)
 }
 
 #[test]
@@ -398,11 +406,11 @@ fn harness_daemon_applies_distinctive_spawn_envelope_socket_modes() {
 
     assert_eq!(
         domain_mode, 0o640,
-        "domain socket mode did not pick up PERSONA_SOCKET_MODE=640",
+        "domain socket mode did not pick up the configuration socket mode",
     );
     assert_eq!(
         supervision_mode, 0o660,
-        "supervision socket mode did not pick up PERSONA_SUPERVISION_SOCKET_MODE=660",
+        "supervision socket mode did not pick up the configuration socket mode",
     );
 }
 

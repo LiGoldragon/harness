@@ -24,30 +24,6 @@ pub enum HarnessKind {
 }
 
 impl HarnessKind {
-    /// Parse the kind from a CLI argument value. The accepted spellings
-    /// are the PascalCase variant names lowercased — `codex`, `claude`,
-    /// `pi`, `fixture`. Used by `HarnessDaemonArguments::parse` and by
-    /// any spawn-envelope ingestion path that needs to project a kind
-    /// onto a `--kind` argument value.
-    pub fn from_argument_value(value: &str) -> Option<Self> {
-        match value {
-            "codex" => Some(Self::Codex),
-            "claude" => Some(Self::Claude),
-            "pi" => Some(Self::Pi),
-            "fixture" => Some(Self::Fixture),
-            _ => None,
-        }
-    }
-
-    pub const fn as_argument_value(&self) -> &'static str {
-        match self {
-            Self::Codex => "codex",
-            Self::Claude => "claude",
-            Self::Pi => "pi",
-            Self::Fixture => "fixture",
-        }
-    }
-
     /// Project a `signal-persona-harness`-contract `HarnessKind` onto
     /// the internal kind enum.
     pub const fn from_contract(value: signal_persona_harness::HarnessKind) -> Self {
