@@ -929,7 +929,7 @@ dependencies = [
 [[package]]
 name = "signal-persona-origin"
 version = "0.1.0"
-source = "git+https://github.com/LiGoldragon/signal-persona-origin.git#2e949ed0064f2c0ecc1c8f6e4bb9eba8300858bb"
+source = "git+https://github.com/LiGoldragon/signal-persona-origin.git#fd116597e33060302adc5574bc30d97695518bc2"
 dependencies = [
  "nota-codec",
  "rkyv",

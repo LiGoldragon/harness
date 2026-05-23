@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use persona_harness::{
-    Harness, HarnessBinding, HarnessId, HarnessKind, HarnessLifecycle, ReadState,
+    Harness, HarnessBinding, HarnessIdentifier, HarnessKind, HarnessLifecycle, ReadState,
     RecordTranscriptLine, SetHarnessLifecycle, TranscriptLine,
 };
 
@@ -126,7 +126,7 @@ fn harness_identity_projection_cannot_leak_everything_by_default() {
     assert!(source.contains("Hidden,"));
     assert!(!source.contains("Access"));
     assert!(source.contains("pub struct HarnessIdentityProjection {"));
-    assert!(source.contains("id: Option<HarnessId>,"));
+    assert!(source.contains("id: Option<HarnessIdentifier>,"));
     assert!(source.contains("kind: Option<HarnessKind>,"));
     assert!(source.contains("working_directory: Option<String>,"));
 }
@@ -282,7 +282,7 @@ async fn harness_runtime_cannot_emit_transcript_for_another_harness() {
 
 fn binding() -> HarnessBinding {
     HarnessBinding::new(
-        HarnessId::new("operator"),
+        HarnessIdentifier::new("operator"),
         HarnessKind::Codex,
         "/tmp/operator",
     )

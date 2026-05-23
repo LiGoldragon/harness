@@ -35,7 +35,7 @@ use signal_persona_harness::{
     HarnessStatusQuery, HarnessUnimplementedReason, InteractionPrompt, MessageBody,
     MessageDelivery, MessageSender, MessageSlot,
 };
-use signal_persona_origin::{OwnerIdentity, UnixUserId};
+use signal_persona_origin::{OwnerIdentity, UnixUserIdentifier};
 use signal_persona_terminal::{
     TerminalGeneration, TerminalInputAccepted, TerminalReply, TerminalRequest,
 };
@@ -188,7 +188,7 @@ fn daemon_from_single_nota_configuration_argument(
         harness_name: HarnessName::new("operator"),
         harness_kind,
         terminal_socket_path: None,
-        owner_identity: OwnerIdentity::UnixUser(UnixUserId::new(1000)),
+        owner_identity: OwnerIdentity::UnixUser(UnixUserIdentifier::new(1000)),
     };
     let mut encoder = Encoder::new();
     configuration
@@ -360,7 +360,7 @@ fn harness_daemon_applies_distinctive_spawn_envelope_socket_modes() {
     use signal_persona_harness::{
         HarnessDaemonConfiguration, HarnessKind as ContractHarnessKind, HarnessName,
     };
-    use signal_persona_origin::{OwnerIdentity, UnixUserId};
+    use signal_persona_origin::{OwnerIdentity, UnixUserIdentifier};
 
     let fixture = SocketFixture::new("distinctive-socket-modes");
     let supervision_socket = fixture.supervision_socket();
@@ -373,7 +373,7 @@ fn harness_daemon_applies_distinctive_spawn_envelope_socket_modes() {
         harness_name: HarnessName::new("operator"),
         harness_kind: ContractHarnessKind::Fixture,
         terminal_socket_path: None,
-        owner_identity: OwnerIdentity::UnixUser(UnixUserId::new(1000)),
+        owner_identity: OwnerIdentity::UnixUser(UnixUserIdentifier::new(1000)),
     };
     let mut encoder = Encoder::new();
     configuration
@@ -421,7 +421,7 @@ fn harness_daemon_answers_component_supervision_relation() {
     use signal_persona_harness::{
         HarnessDaemonConfiguration, HarnessKind as ContractHarnessKind, HarnessName,
     };
-    use signal_persona_origin::{OwnerIdentity, UnixUserId};
+    use signal_persona_origin::{OwnerIdentity, UnixUserIdentifier};
 
     let fixture = SocketFixture::new("component-supervision");
     let supervision_socket = fixture.supervision_socket();
@@ -434,7 +434,7 @@ fn harness_daemon_answers_component_supervision_relation() {
         harness_name: HarnessName::new("operator"),
         harness_kind: ContractHarnessKind::Fixture,
         terminal_socket_path: None,
-        owner_identity: OwnerIdentity::UnixUser(UnixUserId::new(1000)),
+        owner_identity: OwnerIdentity::UnixUser(UnixUserIdentifier::new(1000)),
     };
     let mut encoder = Encoder::new();
     configuration

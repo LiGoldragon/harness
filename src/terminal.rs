@@ -6,25 +6,25 @@ use signal_persona_terminal::{
     TerminalRequest,
 };
 
-use crate::{HarnessId, Result};
+use crate::{HarnessIdentifier, Result};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HarnessTerminalBinding {
-    harness: HarnessId,
+    harness: HarnessIdentifier,
     terminal: TerminalName,
 }
 
 impl HarnessTerminalBinding {
-    pub fn for_harness(harness: HarnessId) -> Self {
+    pub fn for_harness(harness: HarnessIdentifier) -> Self {
         let terminal = TerminalName::new(harness.as_str());
         Self { harness, terminal }
     }
 
-    pub fn new(harness: HarnessId, terminal: TerminalName) -> Self {
+    pub fn new(harness: HarnessIdentifier, terminal: TerminalName) -> Self {
         Self { harness, terminal }
     }
 
-    pub fn harness(&self) -> &HarnessId {
+    pub fn harness(&self) -> &HarnessIdentifier {
         &self.harness
     }
 

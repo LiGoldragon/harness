@@ -13,7 +13,7 @@ use signal_persona_harness::{
 };
 
 use crate::{
-    Error, Harness, HarnessBinding, HarnessId, HarnessKind, HarnessLifecycle, HarnessState,
+    Error, Harness, HarnessBinding, HarnessIdentifier, HarnessKind, HarnessLifecycle, HarnessState,
     HarnessTerminalBinding, HarnessTerminalDelivery, HarnessTerminalEndpoint, ReadState, Result,
     SetHarnessLifecycle,
     supervision::{SupervisionListener, SupervisionProfile, SupervisionSocketMode},
@@ -154,7 +154,7 @@ impl HarnessDaemon {
 
     fn binding(&self) -> HarnessBinding {
         HarnessBinding::new(
-            HarnessId::new(self.harness.as_str()),
+            HarnessIdentifier::new(self.harness.as_str()),
             self.kind.clone(),
             std::env::current_dir()
                 .map(|path| path.display().to_string())
@@ -396,7 +396,7 @@ impl HarnessRequestHandler {
         };
 
         let binding =
-            HarnessTerminalBinding::for_harness(HarnessId::new(delivery.harness.as_str()));
+            HarnessTerminalBinding::for_harness(HarnessIdentifier::new(delivery.harness.as_str()));
         let mut terminal_delivery = HarnessTerminalDelivery::new(endpoint);
         match terminal_delivery.deliver_text(&binding, delivery.body.as_str()) {
             Ok(receipt) if receipt.delivered() => Ok(DeliveryCompleted {

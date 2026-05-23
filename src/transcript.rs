@@ -1,4 +1,4 @@
-use crate::HarnessId;
+use crate::HarnessIdentifier;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TranscriptLine {
@@ -19,16 +19,16 @@ impl TranscriptLine {
 
 #[derive(Debug, Clone, PartialEq, Eq, kameo::Reply)]
 pub struct TranscriptEvent {
-    harness: HarnessId,
+    harness: HarnessIdentifier,
     line: TranscriptLine,
 }
 
 impl TranscriptEvent {
-    pub fn new(harness: HarnessId, line: TranscriptLine) -> Self {
+    pub fn new(harness: HarnessIdentifier, line: TranscriptLine) -> Self {
         Self { harness, line }
     }
 
-    pub fn harness(&self) -> &HarnessId {
+    pub fn harness(&self) -> &HarnessIdentifier {
         &self.harness
     }
 

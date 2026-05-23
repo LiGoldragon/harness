@@ -13,7 +13,7 @@ pub use daemon::{
 };
 pub use error::{Error, Result};
 pub use harness::{
-    HarnessBinding, HarnessId, HarnessIdentityProjection, HarnessIdentityView, HarnessKind,
+    HarnessBinding, HarnessIdentifier, HarnessIdentityProjection, HarnessIdentityView, HarnessKind,
 };
 pub use runtime::{
     Harness, HarnessLifecycle, HarnessState, ReadState, RecordTranscriptLine, SetHarnessLifecycle,

@@ -1,9 +1,9 @@
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct HarnessId {
+pub struct HarnessIdentifier {
     value: String,
 }
 
-impl HarnessId {
+impl HarnessIdentifier {
     pub fn new(value: impl Into<String>) -> Self {
         Self {
             value: value.into(),
@@ -38,13 +38,17 @@ impl HarnessKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HarnessBinding {
-    id: HarnessId,
+    id: HarnessIdentifier,
     kind: HarnessKind,
     working_directory: String,
 }
 
 impl HarnessBinding {
-    pub fn new(id: HarnessId, kind: HarnessKind, working_directory: impl Into<String>) -> Self {
+    pub fn new(
+        id: HarnessIdentifier,
+        kind: HarnessKind,
+        working_directory: impl Into<String>,
+    ) -> Self {
         Self {
             id,
             kind,
@@ -52,7 +56,7 @@ impl HarnessBinding {
         }
     }
 
-    pub fn id(&self) -> &HarnessId {
+    pub fn id(&self) -> &HarnessIdentifier {
         &self.id
     }
 
@@ -90,13 +94,13 @@ pub enum HarnessIdentityView {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HarnessIdentityProjection {
-    id: Option<HarnessId>,
+    id: Option<HarnessIdentifier>,
     kind: Option<HarnessKind>,
     working_directory: Option<String>,
 }
 
 impl HarnessIdentityProjection {
-    pub fn id(&self) -> Option<&HarnessId> {
+    pub fn id(&self) -> Option<&HarnessIdentifier> {
         self.id.as_ref()
     }
 
