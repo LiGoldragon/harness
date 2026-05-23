@@ -24,7 +24,7 @@ persona-terminal       = { git = "https://github.com/LiGoldragon/persona-termina
 signal-core            = { git = "https://github.com/LiGoldragon/signal-core.git" }
 signal-frame           = { git = "https://github.com/LiGoldragon/signal-frame.git", branch = "main" }
 signal-persona         = { git = "https://github.com/LiGoldragon/signal-persona.git" }
-signal-persona-auth     = { git = "https://github.com/LiGoldragon/signal-persona-auth.git" }
+signal-persona-origin     = { git = "https://github.com/LiGoldragon/signal-persona-origin.git" }
 signal-persona-harness = { git = "https://github.com/LiGoldragon/signal-persona-harness.git", branch = "main" }
 signal-persona-terminal = { git = "https://github.com/LiGoldragon/signal-persona-terminal.git", branch = "main" }
 thiserror               = "2"

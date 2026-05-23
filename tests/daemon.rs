@@ -28,7 +28,6 @@ use signal_persona::{
     ComponentHealth, ComponentKind, ComponentName, EngineManagementProtocolVersion, Presence,
     SocketMode as WireSocketMode, WirePath,
 };
-use signal_persona_auth::{OwnerIdentity, UnixUserId};
 use signal_persona_harness::{
     DeliveryCompleted, DeliveryFailed, DeliveryFailureReason, HarnessDaemonConfiguration,
     HarnessEvent, HarnessFrame, HarnessFrameBody, HarnessHealth, HarnessName, HarnessOperationKind,
@@ -36,6 +35,7 @@ use signal_persona_harness::{
     HarnessStatusQuery, HarnessUnimplementedReason, InteractionPrompt, MessageBody,
     MessageDelivery, MessageSender, MessageSlot,
 };
+use signal_persona_origin::{OwnerIdentity, UnixUserId};
 use signal_persona_terminal::{
     TerminalGeneration, TerminalInputAccepted, TerminalReply, TerminalRequest,
 };
@@ -357,10 +357,10 @@ fn harness_daemon_answers_status_readiness() {
 fn harness_daemon_applies_distinctive_spawn_envelope_socket_modes() {
     use nota_codec::{Encoder, NotaEncode};
     use signal_persona::{SocketMode as WireSocketMode, WirePath};
-    use signal_persona_auth::{OwnerIdentity, UnixUserId};
     use signal_persona_harness::{
         HarnessDaemonConfiguration, HarnessKind as ContractHarnessKind, HarnessName,
     };
+    use signal_persona_origin::{OwnerIdentity, UnixUserId};
 
     let fixture = SocketFixture::new("distinctive-socket-modes");
     let supervision_socket = fixture.supervision_socket();
@@ -418,10 +418,10 @@ fn harness_daemon_applies_distinctive_spawn_envelope_socket_modes() {
 fn harness_daemon_answers_component_supervision_relation() {
     use nota_codec::{Encoder, NotaEncode};
     use signal_persona::{SocketMode as WireSocketMode, WirePath};
-    use signal_persona_auth::{OwnerIdentity, UnixUserId};
     use signal_persona_harness::{
         HarnessDaemonConfiguration, HarnessKind as ContractHarnessKind, HarnessName,
     };
+    use signal_persona_origin::{OwnerIdentity, UnixUserId};
 
     let fixture = SocketFixture::new("component-supervision");
     let supervision_socket = fixture.supervision_socket();
