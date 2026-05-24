@@ -4,13 +4,13 @@
 //! tests prove the three-actor pattern (manager, handler,
 //! publisher) is the path the producer took.
 
-use kameo::actor::{ActorRef, Spawn};
-use persona_harness::{
+use harness::{
     CloseTranscriptSubscription, OpenTranscriptSubscription, PublishTranscriptObservation,
     ReadHandlerStatus, ReadManagerStatus, ReadPublisherStatus, TranscriptDeliveryEvent,
     TranscriptDeltaPublisher, TranscriptSubscriptionManager, TranscriptSubscriptionSink,
 };
-use signal_persona_harness::{
+use kameo::actor::{ActorRef, Spawn};
+use signal_harness::{
     HarnessName, HarnessTranscriptSequence, HarnessTranscriptToken, TranscriptObservation,
 };
 
@@ -317,7 +317,7 @@ async fn slow_subscriber_does_not_block_sibling_subscription() {
     // buffered overruns; not closed.
     let slow_status = fixture
         .manager
-        .ask(persona_harness::ReadSubscriptionHandlers)
+        .ask(harness::ReadSubscriptionHandlers)
         .await
         .expect("handlers")
         .handlers;

@@ -25,7 +25,7 @@ use std::sync::Arc;
 use kameo::actor::{Actor, ActorRef, Spawn};
 use kameo::error::Infallible;
 use kameo::message::{Context, Message};
-use signal_persona_harness::{
+use signal_harness::{
     HarnessName, HarnessSubscriptionRetracted, HarnessTranscriptSequence,
     HarnessTranscriptSnapshot, HarnessTranscriptToken, TranscriptObservation,
 };

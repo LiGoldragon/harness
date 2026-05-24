@@ -1,4 +1,4 @@
-use persona_harness::{
+use harness::{
     HarnessBinding, HarnessIdentifier, HarnessIdentityView, HarnessKind, HarnessTerminalBinding,
     HarnessTerminalDelivery, HarnessTerminalEndpoint, TerminalDeliveryPath, TranscriptEvent,
     TranscriptLine,

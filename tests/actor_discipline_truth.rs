@@ -1,4 +1,4 @@
-//! Architectural-truth witnesses for persona-harness's actor
+//! Architectural-truth witnesses for harness's actor
 //! discipline.
 //!
 //! - Public actor nouns are data-bearing — `mem::size_of::<X>() > 0`.
@@ -25,11 +25,11 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use persona_harness::runtime::Harness;
-use persona_harness::subscription::{
+use harness::runtime::Harness;
+use harness::subscription::{
     TranscriptDeltaPublisher, TranscriptStreamingReplyHandler, TranscriptSubscriptionManager,
 };
-use persona_harness::supervision::SupervisionPhase;
+use harness::supervision::SupervisionPhase;
 
 #[test]
 fn public_actor_nouns_carry_data() {

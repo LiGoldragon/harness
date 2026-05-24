@@ -27,7 +27,7 @@ pub struct SupervisionProfile {
 impl SupervisionProfile {
     pub fn harness() -> Self {
         Self {
-            name: ComponentName::new("persona-harness"),
+            name: ComponentName::new("harness"),
             kind: ComponentKind::Harness,
             health: ComponentHealth::Running,
         }

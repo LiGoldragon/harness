@@ -5,7 +5,7 @@ This repository follows the primary workspace orchestration protocol.
 
 ## Purpose
 
-`persona-harness` owns typed harness identity, lifecycle, transcript capture,
+`harness` owns typed harness identity, lifecycle, transcript capture,
 input observations, and adapter contracts for interactive agent harnesses.
 
 ## Local Rules

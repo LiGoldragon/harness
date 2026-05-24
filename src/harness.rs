@@ -24,14 +24,14 @@ pub enum HarnessKind {
 }
 
 impl HarnessKind {
-    /// Project a `signal-persona-harness`-contract `HarnessKind` onto
+    /// Project a `signal-harness`-contract `HarnessKind` onto
     /// the internal kind enum.
-    pub const fn from_contract(value: signal_persona_harness::HarnessKind) -> Self {
+    pub const fn from_contract(value: signal_harness::HarnessKind) -> Self {
         match value {
-            signal_persona_harness::HarnessKind::Codex => Self::Codex,
-            signal_persona_harness::HarnessKind::Claude => Self::Claude,
-            signal_persona_harness::HarnessKind::Pi => Self::Pi,
-            signal_persona_harness::HarnessKind::Fixture => Self::Fixture,
+            signal_harness::HarnessKind::Codex => Self::Codex,
+            signal_harness::HarnessKind::Claude => Self::Claude,
+            signal_harness::HarnessKind::Pi => Self::Pi,
+            signal_harness::HarnessKind::Fixture => Self::Fixture,
         }
     }
 }

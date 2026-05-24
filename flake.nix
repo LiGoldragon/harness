@@ -73,8 +73,8 @@
             context.commonArgs
             // {
               inherit (context) cargoArtifacts;
-              pname = "persona-harness";
-              meta.mainProgram = "persona-harness-daemon";
+              pname = "harness";
+              meta.mainProgram = "harness-daemon";
             }
           );
         }
@@ -137,7 +137,7 @@
         {
           default = {
             type = "app";
-            program = "${self.packages.${system}.default}/bin/persona-harness-daemon";
+            program = "${self.packages.${system}.default}/bin/harness-daemon";
           };
         }
       );

@@ -7,10 +7,8 @@ use std::sync::mpsc::{Receiver, channel};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use harness::{HarnessDaemon, HarnessFrameCodec, HarnessKind, SocketMode, SupervisionFrameCodec};
 use nota_config::ConfigurationSource;
-use persona_harness::{
-    HarnessDaemon, HarnessFrameCodec, HarnessKind, SocketMode, SupervisionFrameCodec,
-};
 use persona_terminal::supervisor::TerminalSupervisorFrameCodec;
 use signal_core::{
     ExchangeIdentifier, ExchangeLane, LaneSequence, NonEmpty, Operation, Reply, Request,
@@ -20,6 +18,13 @@ use signal_frame::{
     ExchangeIdentifier as FrameExchangeIdentifier, ExchangeLane as FrameExchangeLane,
     LaneSequence as FrameLaneSequence, Request as FrameRequest, SessionEpoch as FrameSessionEpoch,
 };
+use signal_harness::{
+    DeliveryCompleted, DeliveryFailed, DeliveryFailureReason, HarnessDaemonConfiguration,
+    HarnessEvent, HarnessFrame, HarnessFrameBody, HarnessHealth, HarnessName, HarnessOperationKind,
+    HarnessReadiness, HarnessRequest, HarnessRequestUnimplemented, HarnessStatus,
+    HarnessStatusQuery, HarnessUnimplementedReason, InteractionPrompt, MessageBody,
+    MessageDelivery, MessageSender, MessageSlot,
+};
 use signal_persona::engine_management::{
     Frame as SupervisionFrame, FrameBody as SupervisionFrameBody, Operation as SupervisionRequest,
     Query as SupervisionQuery, Reply as SupervisionReply,
@@ -27,13 +32,6 @@ use signal_persona::engine_management::{
 use signal_persona::{
     ComponentHealth, ComponentKind, ComponentName, EngineManagementProtocolVersion, Presence,
     SocketMode as WireSocketMode, WirePath,
-};
-use signal_persona_harness::{
-    DeliveryCompleted, DeliveryFailed, DeliveryFailureReason, HarnessDaemonConfiguration,
-    HarnessEvent, HarnessFrame, HarnessFrameBody, HarnessHealth, HarnessName, HarnessOperationKind,
-    HarnessReadiness, HarnessRequest, HarnessRequestUnimplemented, HarnessStatus,
-    HarnessStatusQuery, HarnessUnimplementedReason, InteractionPrompt, MessageBody,
-    MessageDelivery, MessageSender, MessageSlot,
 };
 use signal_persona_origin::{OwnerIdentity, UnixUserIdentifier};
 use signal_persona_terminal::{
@@ -152,17 +150,15 @@ fn harness_daemon_applies_spawn_envelope_socket_mode() {
 
 #[test]
 fn harness_daemon_accepts_fixture_kind_from_single_nota_configuration_argument() {
-    let daemon = daemon_from_single_nota_configuration_argument(
-        signal_persona_harness::HarnessKind::Fixture,
-    );
+    let daemon =
+        daemon_from_single_nota_configuration_argument(signal_harness::HarnessKind::Fixture);
 
     assert_eq!(daemon.kind(), &HarnessKind::Fixture);
 }
 
 #[test]
 fn harness_daemon_accepts_codex_kind_from_single_nota_configuration_argument() {
-    let daemon =
-        daemon_from_single_nota_configuration_argument(signal_persona_harness::HarnessKind::Codex);
+    let daemon = daemon_from_single_nota_configuration_argument(signal_harness::HarnessKind::Codex);
 
     assert_eq!(daemon.kind(), &HarnessKind::Codex);
 }
@@ -176,7 +172,7 @@ fn harness_daemon_configuration_rejects_multiple_arguments() {
 }
 
 fn daemon_from_single_nota_configuration_argument(
-    harness_kind: signal_persona_harness::HarnessKind,
+    harness_kind: signal_harness::HarnessKind,
 ) -> HarnessDaemon {
     use nota_codec::{Encoder, NotaEncode};
 
@@ -222,7 +218,7 @@ fn harness_frame_codec_rejects_mismatched_signal_verb() {
         .expect_err("mismatched verb is rejected");
 
     match error {
-        persona_harness::Error::InvalidSignalRequest { reason } => {
+        harness::Error::InvalidSignalRequest { reason } => {
             assert_eq!(
                 reason,
                 RequestRejectionReason::VerbPayloadMismatch { index: 0 }
@@ -350,16 +346,16 @@ fn harness_daemon_answers_status_readiness() {
 /// fixed value fails this assertion.
 ///
 /// Closes the witness gap recorded in
-/// `~/primary/reports/designer/188-persona-harness-gap-scan.md` §11.4 and
+/// `~/primary/reports/designer/188-harness-gap-scan.md` §11.4 and
 /// §9 (the "MISSING: Daemon applies spawn-envelope socket mode" row of
 /// the constraint-test table) for the supervision socket specifically.
 #[test]
 fn harness_daemon_applies_distinctive_spawn_envelope_socket_modes() {
     use nota_codec::{Encoder, NotaEncode};
-    use signal_persona::{SocketMode as WireSocketMode, WirePath};
-    use signal_persona_harness::{
+    use signal_harness::{
         HarnessDaemonConfiguration, HarnessKind as ContractHarnessKind, HarnessName,
     };
+    use signal_persona::{SocketMode as WireSocketMode, WirePath};
     use signal_persona_origin::{OwnerIdentity, UnixUserIdentifier};
 
     let fixture = SocketFixture::new("distinctive-socket-modes");
@@ -383,10 +379,10 @@ fn harness_daemon_applies_distinctive_spawn_envelope_socket_modes() {
     text.push('\n');
     std::fs::write(&configuration_path, text).expect("write harness config");
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_persona-harness-daemon"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_harness-daemon"))
         .arg(&configuration_path)
         .spawn()
-        .expect("persona-harness-daemon starts");
+        .expect("harness-daemon starts");
 
     wait_for_socket(fixture.socket());
     wait_for_socket(&supervision_socket);
@@ -417,10 +413,10 @@ fn harness_daemon_applies_distinctive_spawn_envelope_socket_modes() {
 #[test]
 fn harness_daemon_answers_component_supervision_relation() {
     use nota_codec::{Encoder, NotaEncode};
-    use signal_persona::{SocketMode as WireSocketMode, WirePath};
-    use signal_persona_harness::{
+    use signal_harness::{
         HarnessDaemonConfiguration, HarnessKind as ContractHarnessKind, HarnessName,
     };
+    use signal_persona::{SocketMode as WireSocketMode, WirePath};
     use signal_persona_origin::{OwnerIdentity, UnixUserIdentifier};
 
     let fixture = SocketFixture::new("component-supervision");
@@ -444,10 +440,10 @@ fn harness_daemon_answers_component_supervision_relation() {
     text.push('\n');
     std::fs::write(&configuration_path, text).expect("write harness config");
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_persona-harness-daemon"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_harness-daemon"))
         .arg(&configuration_path)
         .spawn()
-        .expect("persona-harness-daemon starts");
+        .expect("harness-daemon starts");
 
     wait_for_socket(&supervision_socket);
     let mode = std::fs::metadata(&supervision_socket)
@@ -463,7 +459,7 @@ fn harness_daemon_answers_component_supervision_relation() {
     write_supervision_request(
         &mut stream,
         SupervisionRequest::Announce(Presence {
-            expected_component: ComponentName::new("persona-harness"),
+            expected_component: ComponentName::new("harness"),
             expected_kind: ComponentKind::Harness,
             engine_management_protocol_version: EngineManagementProtocolVersion::new(1),
         }),
@@ -471,14 +467,14 @@ fn harness_daemon_answers_component_supervision_relation() {
     assert!(matches!(
         codec.read_reply(&mut stream).expect("identity reply"),
         SupervisionReply::Identified(identity)
-            if identity.name.as_str() == "persona-harness"
+            if identity.name.as_str() == "harness"
                 && identity.kind == ComponentKind::Harness
     ));
 
     write_supervision_request(
         &mut stream,
         SupervisionRequest::Query(SupervisionQuery::ReadinessStatus(ComponentName::new(
-            "persona-harness",
+            "harness",
         ))),
     );
     assert!(matches!(
@@ -489,7 +485,7 @@ fn harness_daemon_answers_component_supervision_relation() {
     write_supervision_request(
         &mut stream,
         SupervisionRequest::Query(SupervisionQuery::HealthStatus(ComponentName::new(
-            "persona-harness",
+            "harness",
         ))),
     );
     assert!(matches!(

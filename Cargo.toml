@@ -1,19 +1,19 @@
 [package]
-name         = "persona-harness"
+name         = "harness"
 version      = "0.1.0"
 edition      = "2024"
 rust-version = "1.89"
 license      = "MIT OR Apache-2.0"
-repository   = "https://github.com/LiGoldragon/persona-harness"
+repository   = "https://github.com/LiGoldragon/harness"
 description  = "Interactive harness abstraction for Persona."
 publish      = false
 
 [lib]
-name = "persona_harness"
+name = "harness"
 path = "src/lib.rs"
 
 [[bin]]
-name = "persona-harness-daemon"
+name = "harness-daemon"
 path = "src/main.rs"
 
 [dependencies]
@@ -25,7 +25,7 @@ signal-core            = { git = "https://github.com/LiGoldragon/signal-core.git
 signal-frame           = { git = "https://github.com/LiGoldragon/signal-frame.git", branch = "main" }
 signal-persona         = { git = "https://github.com/LiGoldragon/signal-persona.git" }
 signal-persona-origin     = { git = "https://github.com/LiGoldragon/signal-persona-origin.git" }
-signal-persona-harness = { git = "https://github.com/LiGoldragon/signal-persona-harness.git", branch = "main" }
+signal-harness = { git = "https://github.com/LiGoldragon/signal-harness.git", branch = "main" }
 signal-persona-terminal = { git = "https://github.com/LiGoldragon/signal-persona-terminal.git", branch = "main" }
 thiserror               = "2"
 tokio                   = { version = "1", features = ["rt-multi-thread", "macros"] }

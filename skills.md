@@ -1,4 +1,4 @@
-# persona-harness skill
+# harness skill
 
 Work here when the change concerns harness identity, lifecycle, transcript
 events, adapter capabilities, harness actor surfaces, or transcript

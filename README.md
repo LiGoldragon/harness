@@ -1,4 +1,4 @@
-# persona-harness
+# harness
 
 Typed harness abstraction for Persona.
 

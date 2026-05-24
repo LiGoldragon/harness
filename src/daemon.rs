@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use kameo::actor::ActorRef;
 use signal_core::{ExchangeIdentifier, NonEmpty, Reply, SignalVerb, SubReply};
-use signal_persona_harness::{
+use signal_harness::{
     DeliveryCompleted, DeliveryFailed, DeliveryFailureReason, HarnessDaemonConfiguration,
     HarnessEvent, HarnessFrame, HarnessFrameBody as FrameBody, HarnessHealth, HarnessName,
     HarnessReadiness, HarnessRequest, HarnessRequestUnimplemented, HarnessStatus,
@@ -101,7 +101,7 @@ impl HarnessDaemon {
         let supervision = self.supervision.clone();
         let bound = self.bind()?;
         let _supervision = supervision.map(SupervisionListener::spawn).transpose()?;
-        eprintln!("persona-harness-daemon socket={}", bound.socket.display());
+        eprintln!("harness-daemon socket={}", bound.socket.display());
         bound.serve_forever()
     }
 

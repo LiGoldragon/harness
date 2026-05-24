@@ -247,6 +247,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "harness"
+version = "0.1.0"
+dependencies = [
+ "kameo",
+ "nota-codec",
+ "nota-config",
+ "persona-terminal",
+ "signal-core",
+ "signal-frame",
+ "signal-harness",
+ "signal-persona",
+ "signal-persona-origin",
+ "signal-persona-terminal",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -493,24 +511,6 @@ name = "paste"
 version = "1.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
-
-[[package]]
-name = "persona-harness"
-version = "0.1.0"
-dependencies = [
- "kameo",
- "nota-codec",
- "nota-config",
- "persona-terminal",
- "signal-core",
- "signal-frame",
- "signal-persona",
- "signal-persona-harness",
- "signal-persona-origin",
- "signal-persona-terminal",
- "thiserror 2.0.18",
- "tokio",
-]
 
 [[package]]
 name = "persona-terminal"
@@ -870,6 +870,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "signal-harness"
+version = "0.1.0"
+source = "git+https://github.com/LiGoldragon/signal-harness.git?branch=main#ded87abd0ff2db4f7bb67b5d5a49722d8c6e9e46"
+dependencies = [
+ "nota-codec",
+ "nota-config",
+ "rkyv",
+ "signal-core",
+ "signal-persona",
+ "signal-persona-origin",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "signal-hook"
 version = "0.3.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -910,20 +924,6 @@ dependencies = [
  "signal-frame",
  "signal-persona-origin",
  "signal-sema",
-]
-
-[[package]]
-name = "signal-persona-harness"
-version = "0.1.0"
-source = "git+https://github.com/LiGoldragon/signal-persona-harness.git?branch=main#d81b84bc95d63cba6119bd9ed920b8e7a6215025"
-dependencies = [
- "nota-codec",
- "nota-config",
- "rkyv",
- "signal-core",
- "signal-persona",
- "signal-persona-origin",
- "thiserror 2.0.18",
 ]
 
 [[package]]

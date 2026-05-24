@@ -1,8 +1,8 @@
-# persona-harness — architecture
+# harness — architecture
 
 *Harness identity, lifecycle, transcript, and adapter contracts.*
 
-`persona-harness` models interactive AI harnesses as addressable runtime
+`harness` models interactive AI harnesses as addressable runtime
 objects. `HarnessKind` is the closed four-variant schema — production
 variants `Codex`, `Claude`, `Pi`, and the explicit `Fixture` variant for
 test harnesses. Later production harnesses become explicit variants, not
@@ -18,7 +18,7 @@ in-process; the wire form replaces that adapter without changing the
 typed contract surface.
 
 Transcript and worker-lifecycle observations are pushed as typed events
-over the harness observation channel defined by `signal-persona-harness`.
+over the harness observation channel defined by `signal-harness`.
 Subscribers receive `TranscriptEvent` and lifecycle-transition frames as
 they happen; observation flow is push, never poll. Transitional: the
 runtime's internal `transcript_event_count` is a sequencing counter, not
@@ -26,7 +26,7 @@ the observation surface; the typed observation stream is.
 
 > **Scope.** Any "sema" reference here means today's `sema` library
 > (rename pending → `sema-db`). The eventual `Sema` is broader;
-> today's persona-harness is a realization step. See
+> today's harness is a realization step. See
 > `~/primary/ESSENCE.md` §"Today and eventually".
 
 ---
@@ -47,9 +47,9 @@ flowchart LR
 
 ## 1 · Component Surface
 
-`persona-harness` exposes:
+`harness` exposes:
 
-- a `persona-harness-daemon` skeleton binary for the first-stack engine
+- a `harness-daemon` skeleton binary for the first-stack engine
   supervision witness;
 - harness identity records;
 - lifecycle state;
@@ -69,7 +69,7 @@ binding and counts an input as delivered only after
 
 The harness daemon answers `signal-persona::SupervisionRequest` from a
 canonical `SupervisionPhase` Kameo actor. The daemon receives exactly one
-startup argument: a `signal_persona_harness::HarnessDaemonConfiguration`
+startup argument: a `signal_harness::HarnessDaemonConfiguration`
 record supplied as inline NOTA, a `.nota` path, or a signal-encoded `.rkyv`
 path. That record carries the harness socket path and mode, supervision socket
 path and mode, harness name, `HarnessKind`, optional terminal socket, and owner
@@ -101,7 +101,7 @@ printing untyped text.
 ## 1.6 · Transcript-observation subscription delivery
 
 The harness is the destination push primitive for its own transcript
-state. The subscription contract is `signal-persona-harness`'s
+state. The subscription contract is `signal-harness`'s
 `HarnessTranscriptStream` (Subscribe → typed snapshot → typed deltas
 → typed Retract → typed final ack → end). The runtime side owns the
 producer plane.
@@ -169,7 +169,7 @@ This repo does not own:
 - routing decisions (`persona-router`);
 - OS/window focus backend (`persona-system`);
 - PTY byte transport (`persona-terminal`);
-- harness wire contract definitions (`signal-persona-harness`);
+- harness wire contract definitions (`signal-harness`);
 - terminal wire contract definitions (`signal-persona-terminal`);
 - the top-level engine-manager contract (`signal-persona`);
 - database write ownership for other components' Sema layers.
@@ -186,7 +186,7 @@ This repo does not own:
 - Live harness lifecycle and transcript state belongs inside Kameo actors.
 - Adapter capabilities are explicit typed records, not stringly flags.
 - Fixture-only terminal endpoints cannot claim real terminal delivery.
-- The daemon accepts length-prefixed `signal-persona-harness` frames.
+- The daemon accepts length-prefixed `signal-harness` frames.
 - The daemon applies the managed spawn-envelope socket mode to `harness.sock`
   before accepting client traffic.
 - The daemon turns `MessageDelivery` into terminal input only when a typed
@@ -258,4 +258,4 @@ tests/            harness smoke and actor-runtime constraint tests
 - `../persona-system/ARCHITECTURE.md`
 - `../persona-terminal/ARCHITECTURE.md`
 - `../sema/ARCHITECTURE.md`
-- `../signal-persona-harness/ARCHITECTURE.md`
+- `../signal-harness/ARCHITECTURE.md`

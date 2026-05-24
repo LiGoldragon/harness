@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use persona_harness::{
+use harness::{
     Harness, HarnessBinding, HarnessIdentifier, HarnessKind, HarnessLifecycle, ReadState,
     RecordTranscriptLine, SetHarnessLifecycle, TranscriptLine,
 };

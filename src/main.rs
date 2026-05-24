@@ -1,6 +1,6 @@
+use harness::{Result, daemon::HarnessDaemon};
 use nota_config::ConfigurationSource;
-use persona_harness::{Result, daemon::HarnessDaemon};
-use signal_persona_harness::HarnessDaemonConfiguration;
+use signal_harness::HarnessDaemonConfiguration;
 
 fn main() -> Result<()> {
     let configuration: HarnessDaemonConfiguration = ConfigurationSource::from_argv()?.decode()?;
