@@ -1,0 +1,32 @@
+{}
+
+[
+  (Delivery [Message Prompt Cancel])
+  (Status [Harness])
+  (Transcript [Watch Unwatch])
+]
+
+[]
+
+[]
+
+{
+  Delivery [(Message Message) (Prompt Prompt) (Cancel Cancel)]
+  Status [(Harness Harness)]
+  Transcript [(Watch Watch) (Unwatch Unwatch)]
+  Message (Text)
+  Prompt (Text)
+  Cancel (Identifier)
+  Harness (Identifier)
+  Watch (Identifier)
+  Unwatch (Identifier)
+  Text (String)
+  Identifier (u64)
+  Name (String)
+  Path (String)
+}
+
+[
+  (Version 0 1)
+  (Status Concept)
+]
