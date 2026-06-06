@@ -13,9 +13,9 @@ use signal_harness::{
 };
 
 use crate::{
-    Error, Harness, HarnessBinding, HarnessIdentifier, HarnessKind, HarnessLifecycle, HarnessState,
-    HarnessTerminalBinding, HarnessTerminalDelivery, HarnessTerminalEndpoint, ReadState, Result,
-    SetHarnessLifecycle,
+    Error, Harness, HarnessBinding, HarnessDeliveryAdapter, HarnessIdentifier, HarnessKind,
+    HarnessLifecycle, HarnessState, HarnessTerminalBinding, HarnessTerminalEndpoint,
+    PiRpcProcessConfiguration, PiRpcSession, ReadState, Result, SetHarnessLifecycle,
     supervision::{SupervisionListener, SupervisionProfile, SupervisionSocketMode},
 };
 
@@ -26,6 +26,7 @@ pub struct HarnessDaemon {
     kind: HarnessKind,
     socket_mode: Option<SocketMode>,
     terminal_endpoint: Option<HarnessTerminalEndpoint>,
+    pi_rpc_configuration: Option<PiRpcProcessConfiguration>,
     supervision: Option<SupervisionListener>,
 }
 
@@ -34,6 +35,7 @@ impl HarnessDaemon {
     /// `HarnessDaemonConfiguration` from argv via `nota-config` and
     /// hands the record here.
     pub fn from_configuration(configuration: HarnessDaemonConfiguration) -> Self {
+        let harness_name = configuration.harness_name.clone();
         let supervision = SupervisionListener::new(
             SupervisionProfile::harness(),
             PathBuf::from(configuration.supervision_socket_path.as_str()),
@@ -42,6 +44,18 @@ impl HarnessDaemon {
         let terminal_endpoint = configuration
             .terminal_socket_path
             .map(|path| HarnessTerminalEndpoint::pty_socket(path.as_str()));
+        let pi_rpc_configuration = configuration.pi_rpc_adapter.map(|adapter| {
+            let configuration = PiRpcProcessConfiguration::new(
+                adapter.command_path.as_str(),
+                adapter.session_directory_path.as_str(),
+            )
+            .with_session_name(harness_name.as_str())
+            .with_delivery_command(adapter.delivery_mode.into());
+            match adapter.model_pattern {
+                Some(model_pattern) => configuration.with_model_pattern(model_pattern.as_str()),
+                None => configuration,
+            }
+        });
         Self {
             socket: PathBuf::from(configuration.harness_socket_path.as_str()),
             harness: configuration.harness_name,
@@ -50,6 +64,7 @@ impl HarnessDaemon {
                 configuration.harness_socket_mode.into_u32(),
             )),
             terminal_endpoint,
+            pi_rpc_configuration,
             supervision: Some(supervision),
         }
     }
@@ -61,6 +76,7 @@ impl HarnessDaemon {
             kind: HarnessKind::Fixture,
             socket_mode: None,
             terminal_endpoint: None,
+            pi_rpc_configuration: None,
             supervision: None,
         }
     }
@@ -82,6 +98,11 @@ impl HarnessDaemon {
 
     pub fn with_terminal_socket(mut self, path: impl Into<PathBuf>) -> Self {
         self.terminal_endpoint = Some(HarnessTerminalEndpoint::pty_socket(path));
+        self
+    }
+
+    pub fn with_pi_rpc_process(mut self, configuration: PiRpcProcessConfiguration) -> Self {
+        self.pi_rpc_configuration = Some(configuration);
         self
     }
 
@@ -119,12 +140,13 @@ impl HarnessDaemon {
         }
         let runtime = tokio::runtime::Runtime::new()?;
         let harness = runtime.block_on(self.start_harness())?;
+        let delivery_adapter = self.delivery_adapter()?;
         Ok(BoundHarnessDaemon {
             socket: self.socket,
             runtime,
             listener,
             harness,
-            terminal_endpoint: self.terminal_endpoint,
+            delivery_adapter,
         })
     }
 
@@ -162,17 +184,29 @@ impl HarnessDaemon {
         )
     }
 
+    fn delivery_adapter(&self) -> Result<Option<HarnessDeliveryAdapter>> {
+        if let Some(configuration) = self.pi_rpc_configuration.clone() {
+            return Ok(Some(HarnessDeliveryAdapter::pi_rpc(PiRpcSession::spawn(
+                configuration,
+            )?)));
+        }
+        Ok(self
+            .terminal_endpoint
+            .clone()
+            .map(HarnessDeliveryAdapter::terminal))
+    }
+
     fn handle_connection(
         runtime: &tokio::runtime::Runtime,
         harness: &ActorRef<Harness>,
-        terminal_endpoint: Option<HarnessTerminalEndpoint>,
+        delivery_adapter: Option<&mut HarnessDeliveryAdapter>,
         stream: UnixStream,
     ) -> Result<HarnessEvent> {
         let mut connection = HarnessConnection::from_stream(stream);
         let request = connection.read_signal_request()?;
         let event = runtime.block_on(async {
-            HarnessRequestHandler::new(harness.clone(), terminal_endpoint)
-                .event_for_request(request.request)
+            HarnessRequestHandler::new(harness.clone())
+                .event_for_request(request.request, delivery_adapter)
                 .await
         })?;
         connection.write_signal_event(request.exchange, request.verb, event.clone())?;
@@ -198,7 +232,7 @@ pub struct BoundHarnessDaemon {
     runtime: tokio::runtime::Runtime,
     listener: UnixListener,
     harness: ActorRef<Harness>,
-    terminal_endpoint: Option<HarnessTerminalEndpoint>,
+    delivery_adapter: Option<HarnessDeliveryAdapter>,
 }
 
 impl BoundHarnessDaemon {
@@ -206,12 +240,12 @@ impl BoundHarnessDaemon {
         &self.socket
     }
 
-    pub fn serve_one(self) -> Result<HarnessEvent> {
+    pub fn serve_one(mut self) -> Result<HarnessEvent> {
         let (stream, _address) = self.listener.accept()?;
         let event = HarnessDaemon::handle_connection(
             &self.runtime,
             &self.harness,
-            self.terminal_endpoint.clone(),
+            self.delivery_adapter.as_mut(),
             stream,
         )?;
         self.runtime
@@ -220,13 +254,13 @@ impl BoundHarnessDaemon {
         Ok(event)
     }
 
-    pub fn serve_forever(self) -> Result<()> {
+    pub fn serve_forever(mut self) -> Result<()> {
         for stream in self.listener.incoming() {
             let stream = stream?;
             let _ = HarnessDaemon::handle_connection(
                 &self.runtime,
                 &self.harness,
-                self.terminal_endpoint.clone(),
+                self.delivery_adapter.as_mut(),
                 stream,
             )?;
         }
@@ -346,24 +380,22 @@ impl Default for HarnessFrameCodec {
 #[derive(Debug, Clone)]
 pub struct HarnessRequestHandler {
     harness: ActorRef<Harness>,
-    terminal_endpoint: Option<HarnessTerminalEndpoint>,
 }
 
 impl HarnessRequestHandler {
-    pub fn new(
-        harness: ActorRef<Harness>,
-        terminal_endpoint: Option<HarnessTerminalEndpoint>,
-    ) -> Self {
-        Self {
-            harness,
-            terminal_endpoint,
-        }
+    pub fn new(harness: ActorRef<Harness>) -> Self {
+        Self { harness }
     }
 
-    pub async fn event_for_request(&self, request: HarnessRequest) -> Result<HarnessEvent> {
+    pub async fn event_for_request(
+        &self,
+        request: HarnessRequest,
+        delivery_adapter: Option<&mut HarnessDeliveryAdapter>,
+    ) -> Result<HarnessEvent> {
         match request {
             HarnessRequest::MessageDelivery(delivery) => {
-                self.message_delivery_event(delivery).await
+                self.message_delivery_event(delivery, delivery_adapter)
+                    .await
             }
             HarnessRequest::HarnessStatusQuery(query) => self.status_event(query).await,
             other => Ok(HarnessRequestUnimplemented {
@@ -375,7 +407,11 @@ impl HarnessRequestHandler {
         }
     }
 
-    async fn message_delivery_event(&self, delivery: MessageDelivery) -> Result<HarnessEvent> {
+    async fn message_delivery_event(
+        &self,
+        delivery: MessageDelivery,
+        delivery_adapter: Option<&mut HarnessDeliveryAdapter>,
+    ) -> Result<HarnessEvent> {
         let state = self
             .harness
             .ask(ReadState::expecting_at_least(0))
@@ -388,7 +424,7 @@ impl HarnessRequestHandler {
             ));
         }
 
-        let Some(endpoint) = self.terminal_endpoint.clone() else {
+        let Some(delivery_adapter) = delivery_adapter else {
             return Ok(Self::delivery_failed(
                 delivery,
                 DeliveryFailureReason::TransportRejected,
@@ -397,8 +433,7 @@ impl HarnessRequestHandler {
 
         let binding =
             HarnessTerminalBinding::for_harness(HarnessIdentifier::new(delivery.harness.as_str()));
-        let mut terminal_delivery = HarnessTerminalDelivery::new(endpoint);
-        match terminal_delivery.deliver_text(&binding, delivery.body.as_str()) {
+        match delivery_adapter.deliver_text(&binding, delivery.body.as_str()) {
             Ok(receipt) if receipt.delivered() => Ok(DeliveryCompleted {
                 harness: delivery.harness,
                 message_slot: delivery.message_slot,

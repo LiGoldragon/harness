@@ -7,9 +7,11 @@ use std::sync::mpsc::{Receiver, channel};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use harness::{HarnessDaemon, HarnessFrameCodec, HarnessKind, SocketMode, SupervisionFrameCodec};
+use harness::{
+    HarnessDaemon, HarnessFrameCodec, HarnessKind, PiRpcDeliveryCommand, PiRpcProcessConfiguration,
+    SocketMode, SupervisionFrameCodec,
+};
 use nota_config::ConfigurationSource;
-use persona_terminal::supervisor::TerminalSupervisorFrameCodec;
 use signal_core::{
     ExchangeIdentifier, ExchangeLane, LaneSequence, NonEmpty, Operation, Reply, Request,
     RequestRejectionReason, SessionEpoch, SignalVerb, SubReply,
@@ -27,15 +29,16 @@ use signal_harness::{
 };
 use signal_persona::engine_management::{
     Frame as SupervisionFrame, FrameBody as SupervisionFrameBody, Operation as SupervisionRequest,
-    Query as SupervisionQuery, Reply as SupervisionReply,
+    Presence, Query as SupervisionQuery, Reply as SupervisionReply,
 };
 use signal_persona::{
-    ComponentHealth, ComponentKind, ComponentName, EngineManagementProtocolVersion, Presence,
+    ComponentHealth, ComponentKind, ComponentName, EngineManagementProtocolVersion,
     SocketMode as WireSocketMode, WirePath,
 };
 use signal_persona_origin::{OwnerIdentity, UnixUserIdentifier};
 use signal_persona_terminal::{
-    TerminalGeneration, TerminalInputAccepted, TerminalReply, TerminalRequest,
+    TerminalFrame, TerminalFrameBody, TerminalGeneration, TerminalInputAccepted, TerminalReply,
+    TerminalRequest,
 };
 
 struct SocketFixture {
@@ -86,11 +89,11 @@ impl TerminalAcceptanceSocket {
         let (sender, received) = channel();
         thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("terminal socket accepts input");
-            let codec = TerminalSupervisorFrameCodec::default();
-            let request = codec
+            let codec = TerminalFixtureFrameCodec::default();
+            let received_request = codec
                 .read_request(&mut stream)
                 .expect("terminal socket reads Signal input request");
-            match request {
+            match received_request.request {
                 TerminalRequest::TerminalInput(input) => {
                     sender
                         .send(input.bytes.as_slice().to_vec())
@@ -98,6 +101,8 @@ impl TerminalAcceptanceSocket {
                     codec
                         .write_reply(
                             &mut stream,
+                            received_request.exchange,
+                            received_request.verb,
                             TerminalReply::TerminalInputAccepted(TerminalInputAccepted {
                                 terminal: input.terminal,
                                 generation: TerminalGeneration::new(1),
@@ -128,6 +133,139 @@ impl TerminalAcceptanceSocket {
 impl Drop for TerminalAcceptanceSocket {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TerminalFixtureFrameCodec {
+    maximum_frame_bytes: usize,
+}
+
+impl TerminalFixtureFrameCodec {
+    fn read_frame(&self, stream: &mut UnixStream) -> harness::Result<TerminalFrame> {
+        let mut prefix = [0_u8; 4];
+        std::io::Read::read_exact(stream, &mut prefix)?;
+        let length = u32::from_be_bytes(prefix) as usize;
+        if length > self.maximum_frame_bytes {
+            return Err(harness::Error::UnexpectedSignalFrame {
+                got: format!("terminal frame length {length} exceeds maximum"),
+            });
+        }
+        let mut bytes = Vec::with_capacity(4 + length);
+        bytes.extend_from_slice(&prefix);
+        bytes.resize(4 + length, 0);
+        std::io::Read::read_exact(stream, &mut bytes[4..])?;
+        Ok(TerminalFrame::decode_length_prefixed(bytes.as_slice())?)
+    }
+
+    fn read_request(&self, stream: &mut UnixStream) -> harness::Result<ReceivedTerminalRequest> {
+        match self.read_frame(stream)?.into_body() {
+            TerminalFrameBody::Request { exchange, request } => {
+                let checked = request
+                    .into_checked()
+                    .map_err(|(reason, _)| harness::Error::InvalidSignalRequest { reason })?;
+                let operation = checked.operations.into_head();
+                Ok(ReceivedTerminalRequest {
+                    exchange,
+                    verb: operation.verb,
+                    request: operation.payload,
+                })
+            }
+            other => Err(harness::Error::UnexpectedSignalFrame {
+                got: format!("{other:?}"),
+            }),
+        }
+    }
+
+    fn write_reply(
+        &self,
+        stream: &mut UnixStream,
+        exchange: ExchangeIdentifier,
+        verb: SignalVerb,
+        reply: TerminalReply,
+    ) -> harness::Result<()> {
+        let frame = TerminalFrame::new(TerminalFrameBody::Reply {
+            exchange,
+            reply: Reply::completed(NonEmpty::single(SubReply::Ok {
+                verb,
+                payload: reply,
+            })),
+        });
+        let bytes = frame.encode_length_prefixed()?;
+        stream.write_all(&bytes)?;
+        stream.flush()?;
+        Ok(())
+    }
+}
+
+impl Default for TerminalFixtureFrameCodec {
+    fn default() -> Self {
+        Self {
+            maximum_frame_bytes: 1024 * 1024,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReceivedTerminalRequest {
+    exchange: ExchangeIdentifier,
+    verb: SignalVerb,
+    request: TerminalRequest,
+}
+
+struct PiRpcFixture {
+    root: PathBuf,
+    command_path: PathBuf,
+    capture_path: PathBuf,
+}
+
+impl PiRpcFixture {
+    fn new(name: &str) -> Self {
+        let root = std::env::temp_dir().join(format!(
+            "ph-pi-rpc-{name}-{}-{}",
+            std::process::id(),
+            unique_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("pi rpc fixture root created");
+        let command_path = root.join("pi-rpc-fixture");
+        let capture_path = root.join("commands.jsonl");
+        let script = "#!/bin/sh\n\
+             capture=\"$1\"\n\
+             while IFS= read -r line; do\n\
+             printf '%s\\n' \"$line\" >> \"$capture\"\n\
+             identifier=$(printf '%s\\n' \"$line\" | sed -n 's/.*\"id\":\"\\([^\"]*\\)\".*/\\1/p')\n\
+             command=$(printf '%s\\n' \"$line\" | sed -n 's/.*\"type\":\"\\([^\"]*\\)\".*/\\1/p')\n\
+             printf '{\"id\":\"%s\",\"type\":\"response\",\"command\":\"%s\",\"success\":true}\\n' \"$identifier\" \"$command\"\n\
+             done\n";
+        std::fs::write(&command_path, script).expect("pi rpc fixture script writes");
+        std::fs::set_permissions(&command_path, std::fs::Permissions::from_mode(0o700))
+            .expect("pi rpc fixture script is executable");
+        Self {
+            root,
+            command_path,
+            capture_path,
+        }
+    }
+
+    fn configuration(&self) -> PiRpcProcessConfiguration {
+        PiRpcProcessConfiguration::new(&self.command_path, self.root.join("session"))
+            .with_command_arguments(vec![self.capture_path.display().to_string()])
+            .with_session_name("operator")
+            .with_delivery_command(PiRpcDeliveryCommand::Steer)
+            .with_response_timeout(Duration::from_secs(5))
+    }
+
+    fn captured_command(&self) -> serde_json::Value {
+        let text = std::fs::read_to_string(&self.capture_path)
+            .expect("pi rpc fixture captured one command");
+        let line = text.lines().next().expect("pi rpc command line exists");
+        serde_json::from_str(line).expect("pi rpc command is json")
+    }
+}
+
+impl Drop for PiRpcFixture {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
     }
 }
 
@@ -185,6 +323,7 @@ fn daemon_from_single_nota_configuration_argument(
         harness_kind,
         terminal_socket_path: None,
         owner_identity: OwnerIdentity::UnixUser(UnixUserIdentifier::new(1000)),
+        pi_rpc_adapter: None,
     };
     let mut encoder = Encoder::new();
     configuration
@@ -267,6 +406,58 @@ fn harness_daemon_delivers_message_to_terminal_endpoint() {
         terminal
             .received_text()
             .contains("deliver through harness daemon")
+    );
+}
+
+#[test]
+fn harness_daemon_delivers_message_to_pi_rpc_endpoint() {
+    let fixture = SocketFixture::new("message-pi-rpc");
+    let pi_rpc = PiRpcFixture::new("message-pi-rpc");
+    let server = HarnessDaemon::from_socket(fixture.socket())
+        .with_harness(HarnessName::new("operator"))
+        .with_kind(HarnessKind::Pi)
+        .with_pi_rpc_process(pi_rpc.configuration())
+        .bind()
+        .expect("daemon binds before client connects");
+    let socket = server.socket().clone();
+    let handle = thread::spawn(move || server.serve_one());
+
+    let mut stream = UnixStream::connect(socket).expect("client connects");
+    write_request(
+        &mut stream,
+        MessageDelivery {
+            harness: HarnessName::new("operator"),
+            sender: MessageSender::new("router"),
+            body: MessageBody::new("deliver through pi rpc"),
+            message_slot: MessageSlot::new(9),
+        }
+        .into(),
+    );
+    let event = read_event(&mut stream);
+    let server_event = handle
+        .join()
+        .expect("daemon thread joins")
+        .expect("daemon handles one request");
+
+    let expected = HarnessEvent::DeliveryCompleted(DeliveryCompleted {
+        harness: HarnessName::new("operator"),
+        message_slot: MessageSlot::new(9),
+    });
+    assert_eq!(event, expected);
+    assert_eq!(server_event, expected);
+
+    let command = pi_rpc.captured_command();
+    assert_eq!(
+        command.get("type").and_then(serde_json::Value::as_str),
+        Some("steer")
+    );
+    assert_eq!(
+        command.get("message").and_then(serde_json::Value::as_str),
+        Some("deliver through pi rpc")
+    );
+    assert_eq!(
+        command.get("id").and_then(serde_json::Value::as_str),
+        Some("harness-1")
     );
 }
 
@@ -370,6 +561,7 @@ fn harness_daemon_applies_distinctive_spawn_envelope_socket_modes() {
         harness_kind: ContractHarnessKind::Fixture,
         terminal_socket_path: None,
         owner_identity: OwnerIdentity::UnixUser(UnixUserIdentifier::new(1000)),
+        pi_rpc_adapter: None,
     };
     let mut encoder = Encoder::new();
     configuration
@@ -431,6 +623,7 @@ fn harness_daemon_answers_component_supervision_relation() {
         harness_kind: ContractHarnessKind::Fixture,
         terminal_socket_path: None,
         owner_identity: OwnerIdentity::UnixUser(UnixUserIdentifier::new(1000)),
+        pi_rpc_adapter: None,
     };
     let mut encoder = Encoder::new();
     configuration

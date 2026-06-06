@@ -12,10 +12,17 @@ transcript observations, sequence pointers, and delivery capabilities.
 The Persona-facing terminal contract is `signal-persona-terminal`. The
 destination shape for harness → terminal delivery is a typed
 `signal-persona-terminal` request/reply exchanged as a length-prefixed
-Signal frame on the terminal supervisor socket. Transitional: the
-harness runtime currently calls the `persona-terminal` library adapter
-in-process; the wire form replaces that adapter without changing the
-typed contract surface.
+Signal frame on the terminal supervisor socket. The harness runtime
+writes the generated `TerminalFrame` directly; it does not depend on the
+retired in-process `persona-terminal` helper crate.
+
+The Pi-facing intake contract is Pi RPC/JSONL over stdio. A Pi-kind
+harness may be launched with a typed `PiRpcJsonlAdapterConfiguration`
+in `HarnessDaemonConfiguration`; the daemon then owns a long-lived
+`pi --mode rpc` process and converts routed `MessageDelivery` records
+into the configured `prompt`, `steer`, or `follow_up` JSONL command.
+Delivery completes only when Pi emits the matching successful JSONL
+response.
 
 Transcript and worker-lifecycle observations are pushed as typed events
 over the harness observation channel defined by `signal-harness`.
@@ -29,8 +36,6 @@ the observation surface; the typed observation stream is.
 > today's harness is a realization step. See
 > `~/primary/ESSENCE.md` §"Today and eventually".
 
----
-
 ## 0 · TL;DR
 
 This repo owns the harness abstraction. It does not own routing policy,
@@ -40,7 +45,8 @@ OS-specific focus observation, or terminal durable PTY transport.
 flowchart LR
     "persona-router" -->|"delivery request"| "Harness"
     "Harness" -->|"adapter command"| "HarnessAdapter"
-    "HarnessAdapter" -->|"terminal transport"| "persona-terminal"
+    "HarnessAdapter" -->|"TerminalFrame"| "signal-persona-terminal"
+    "HarnessAdapter" -->|"Pi RPC JSONL"| "pi --mode rpc"
     "Harness" -->|"typed observation + sequence pointer"| "persona-router"
     "Harness" -->|"harness-owned state"| "harness Sema"
 ```
@@ -56,14 +62,17 @@ flowchart LR
 - transcript events;
 - adapter capability records;
 - terminal delivery adapter records;
+- Pi RPC/JSONL delivery adapter records;
 - a Kameo harness actor surface for the assembled runtime;
 - test fixtures for fake harnesses.
 
 The only endpoint that may complete without sending bytes to terminal
 transport is `FixtureOnlyHuman`. It is a fixture endpoint, not production
-delivery. Production terminal delivery uses the `persona-terminal` transport
-binding and counts an input as delivered only after
-`TerminalEvent::TerminalInputAccepted`.
+delivery. Production terminal delivery uses the `signal-persona-terminal`
+contract and counts an input as delivered only after
+`TerminalReply::TerminalInputAccepted`. Pi RPC delivery counts as delivered
+only after the configured RPC command is accepted by the Pi JSONL response
+stream.
 
 ## 1.5 · Lifecycle FSM and supervision-relation reception
 
@@ -73,7 +82,9 @@ startup argument: a `signal_harness::HarnessDaemonConfiguration`
 record supplied as inline NOTA, a `.nota` path, or a signal-encoded `.rkyv`
 path. That record carries the harness socket path and mode, supervision socket
 path and mode, harness name, `HarnessKind`, optional terminal socket, and owner
-identity.
+identity. For Pi harnesses it may also carry the optional
+`PiRpcJsonlAdapterConfiguration` that starts the programmatic Pi intake
+process.
 
 `HarnessKind` is not argv state. The daemon takes it from
 `HarnessDaemonConfiguration::harness_kind`, preserving the closed enum while
@@ -163,6 +174,7 @@ This repo owns:
 - transcript event shape;
 - adapter contracts.
 - harness-owned terminal delivery adaptation.
+- harness-owned Pi RPC/JSONL delivery adaptation.
 
 This repo does not own:
 
@@ -172,6 +184,7 @@ This repo does not own:
 - harness wire contract definitions (`signal-harness`);
 - terminal wire contract definitions (`signal-persona-terminal`);
 - the top-level engine-manager contract (`signal-persona`);
+- Pi's internal model/runtime implementation;
 - database write ownership for other components' Sema layers.
 
 ## 4 · Invariants
@@ -193,7 +206,10 @@ This repo does not own:
   terminal endpoint was provided by its spawn envelope or CLI.
 - The daemon reports `DeliveryCompleted` only after terminal transport accepts
   the input bytes.
-- The daemon reports typed `DeliveryFailed` when no terminal endpoint is
+- The daemon reports `DeliveryCompleted` for Pi only after the Pi RPC process
+  emits a successful matching JSONL response for the configured delivery
+  command.
+- The daemon reports typed `DeliveryFailed` when no adapter endpoint is
   available.
 - The message-routing e2e witness is a round-trip only when a real first
   `message` CLI call reaches another harness through real `message-daemon`,
@@ -228,6 +244,7 @@ src/harness.rs    harness identity records
 src/daemon.rs     length-prefixed Signal daemon skeleton
 src/runtime.rs    Kameo lifecycle and transcript state owner
 src/terminal.rs   terminal delivery adapter records
+src/pi.rs         Pi RPC/JSONL process adapter
 src/transcript.rs transcript event records
 tests/            harness smoke and actor-runtime constraint tests
 ```
@@ -247,6 +264,8 @@ tests/            harness smoke and actor-runtime constraint tests
 | Harness daemon applies the managed spawn-envelope socket mode. | `nix flake check .#harness-daemon-applies-spawn-envelope-socket-mode` |
 | Harness daemon flows distinctive socket modes through to both the domain and supervision sockets. | `nix flake check .#harness-daemon-applies-distinctive-spawn-envelope-socket-modes` |
 | Harness daemon delivers message bytes to a configured terminal endpoint. | `nix flake check .#harness-daemon-delivers-message-to-terminal-endpoint` |
+| Harness daemon delivers Pi-kind messages through the Pi RPC/JSONL adapter. | `cargo test --test daemon harness_daemon_delivers_message_to_pi_rpc_endpoint` |
+| The Pi RPC adapter can accept a prompt through the low-quant Gemma 4 MoE local model when the live endpoint is available. | `HARNESS_LIVE_PI_RPC=1 HARNESS_LIVE_PI_MODEL=gemma-4-26b-a4b-ud-q4-k-xl cargo test --test pi_rpc_live -- --nocapture` |
 | Harness daemon rejects message delivery without a terminal endpoint. | `nix flake check .#harness-daemon-rejects-message-delivery-without-terminal-endpoint` |
 | Harness daemon answers status/readiness through its Signal boundary. | `nix flake check .#harness-daemon-answers-status-readiness` |
 | Harness daemon returns typed unimplemented for valid unfinished requests. | `nix flake check .#harness-daemon-returns-typed-unimplemented` |

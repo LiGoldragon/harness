@@ -19,11 +19,29 @@ pub enum Error {
         reason: signal_core::RequestRejectionReason,
     },
 
-    #[error("terminal transport failed: {0}")]
-    TerminalTransport(#[from] persona_terminal::Error),
-
     #[error("nota-config: {0}")]
     NotaConfig(#[from] nota_config::Error),
+
+    #[error("json: {0}")]
+    Json(#[from] serde_json::Error),
+
+    #[error("pi rpc input stream was unavailable")]
+    PiRpcInputUnavailable,
+
+    #[error("pi rpc output stream was unavailable")]
+    PiRpcOutputUnavailable,
+
+    #[error("pi rpc response timed out for command {command_identifier}")]
+    PiRpcResponseTimeout { command_identifier: String },
+
+    #[error("pi rpc rejected command {command_identifier}: {error}")]
+    PiRpcRejected {
+        command_identifier: String,
+        error: String,
+    },
+
+    #[error("pi rpc produced an unexpected response: {got}")]
+    PiRpcUnexpectedResponse { got: String },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

@@ -2,10 +2,10 @@
 
 `harness` models interactive AI harnesses as addressable runtime objects. It owns the
 reusable abstraction for Codex, Claude, and Pi harnesses: identity, lifecycle state,
-typed transcript observations, sequence pointers, adapter capabilities, and terminal
-delivery adaptation. It does not own routing policy, OS/window focus observation, or
-terminal PTY byte transport. Today's harness is a realization step on the
-eventually-self-hosting stack.
+typed transcript observations, sequence pointers, adapter capabilities, terminal
+delivery adaptation, and Pi RPC/JSONL intake. It does not own routing policy,
+OS/window focus observation, or terminal PTY byte transport. Today's harness is a
+realization step on the eventually-self-hosting stack.
 
 `HarnessKind` is a closed four-variant schema — production `Codex`, `Claude`, `Pi`, and
 an explicit `Fixture` variant for test harnesses. Later production harnesses become
@@ -17,6 +17,13 @@ through a canonical `SupervisionPhase` actor, binds `harness.sock` at the manage
 spawn-envelope socket mode before accepting traffic, and replies
 `HarnessRequestUnimplemented` for valid contract operations not yet built — never a panic
 or untyped text.
+
+Pi harness delivery has a typed RPC/JSONL adapter path. When
+`HarnessDaemonConfiguration` carries a `PiRpcJsonlAdapterConfiguration`, the daemon owns a
+long-lived `pi --mode rpc` process, sends routed messages as the configured
+`prompt`/`steer`/`follow_up` command, and marks delivery completed only after Pi's JSONL
+response accepts the command. This is the programmatic Pi intake path; the terminal
+adapter remains for terminal-backed harnesses and fixtures.
 
 Key constraints: harnesses are first-class records. Harness identity has an explicit
 typed visibility axis (`Full`, `Redacted`, `Hidden`); redaction is typed, not a string
@@ -30,10 +37,12 @@ drops with a typed failure rather than overrunning the consumer. Live harness li
 and transcript state belong inside Kameo actors, never loose shared mutable objects; the
 fanout plane is in-process Kameo mailbox sends, no shared `Arc<Mutex<…>>`. Adapter
 capabilities are explicit typed records, not stringly flags. Only the `FixtureOnlyHuman`
-endpoint may complete without sending bytes to terminal transport; production delivery
-counts an input as delivered only after the terminal accepts the bytes, and reports typed
-`DeliveryFailed` when no terminal endpoint is available. The daemon accepts only
-length-prefixed `signal-harness` frames. The message-routing e2e witness must exercise a
+endpoint may complete without sending bytes to terminal transport; production terminal
+delivery counts an input as delivered only after the terminal accepts the bytes, and Pi
+RPC delivery counts a message as delivered only after the RPC sidecar accepts the command.
+The daemon reports typed `DeliveryFailed` when no adapter endpoint is available. The
+daemon accepts only length-prefixed `signal-harness` frames. The message-routing e2e
+witness must exercise a
 real request and reply path through real `message-daemon`, `router-daemon`, and two
 `harness-daemon` instances before it can be described as a round-trip daemon witness; a
 single routed delivery into an acceptance socket is only a one-way routing witness. When

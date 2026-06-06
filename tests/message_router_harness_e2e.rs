@@ -1,4 +1,5 @@
 use std::{
+    io::Write,
     os::unix::{fs::MetadataExt, net::UnixListener},
     path::{Path, PathBuf},
     process::{Child, Command},
@@ -9,12 +10,13 @@ use std::{
 
 use message::{Configuration as MessageConfiguration, command::Output as MessageCommandOutput};
 use nota_codec::{Encoder, NotaEncode};
-use persona_terminal::supervisor::TerminalSupervisorFrameCodec;
+use signal_core::{ExchangeIdentifier, NonEmpty, Reply, SignalVerb, SubReply};
 use signal_harness::{HarnessDaemonConfiguration, HarnessKind, HarnessName};
 use signal_persona::{SocketMode as WireSocketMode, WirePath};
 use signal_persona_origin::{OwnerIdentity, UnixUserIdentifier};
 use signal_persona_terminal::{
-    TerminalGeneration, TerminalInputAccepted, TerminalReply, TerminalRequest,
+    TerminalFrame, TerminalFrameBody, TerminalGeneration, TerminalInputAccepted, TerminalReply,
+    TerminalRequest,
 };
 use signal_router::{
     Actor, ActorIdentifier, EndpointKind, EndpointTransport, GrantDirectMessage, RegisterActor,
@@ -27,7 +29,12 @@ const AGENT_B: &str = "agent-b";
 
 #[test]
 fn message_cli_round_trips_between_two_harness_agents_through_real_daemons() {
-    let test = MessageRouterHarnessE2e::new();
+    let Some(test) = MessageRouterHarnessE2e::new() else {
+        eprintln!(
+            "skipping message/router/harness e2e; set MESSAGE_CLI_BINARY, MESSAGE_DAEMON_BINARY, and ROUTER_DAEMON_BINARY or provide sibling repositories"
+        );
+        return;
+    };
 
     let agent_a_harness = test.spawn_harness_daemon(AGENT_A, test.agent_a_terminal().path());
     let agent_b_harness = test.spawn_harness_daemon(AGENT_B, test.agent_b_terminal().path());
@@ -88,11 +95,11 @@ struct MessageRouterHarnessE2e {
 }
 
 impl MessageRouterHarnessE2e {
-    fn new() -> Self {
+    fn new() -> Option<Self> {
         let root = TempDir::new().expect("tempdir");
-        let binaries = ExternalBinaries::build();
+        let binaries = ExternalBinaries::build()?;
         let agent_b_message_socket = Self::message_socket_for(root.path(), AGENT_B);
-        Self {
+        Some(Self {
             agent_a_terminal: RecordingTerminalSocket::new("agent-a"),
             agent_b_terminal: ReplyingTerminalSocket::new(
                 "agent-b",
@@ -101,7 +108,7 @@ impl MessageRouterHarnessE2e {
             ),
             root,
             binaries,
-        }
+        })
     }
 
     fn root_path(&self) -> &Path {
@@ -169,6 +176,7 @@ impl MessageRouterHarnessE2e {
             harness_kind: HarnessKind::Pi,
             terminal_socket_path: Some(WirePath::new(terminal_socket.display().to_string())),
             owner_identity: OwnerIdentity::UnixUser(UnixUserIdentifier::new(self.current_uid())),
+            pi_rpc_adapter: None,
         };
         NotaFile::write(&configuration_path, &configuration);
         let process = ManagedProcess::spawn(
@@ -299,13 +307,24 @@ struct ExternalBinaries {
 }
 
 impl ExternalBinaries {
-    fn build() -> Self {
-        let repositories = RepositoryPaths::from_environment();
-        Self {
+    fn build() -> Option<Self> {
+        if let Some(binaries) = Self::from_binary_environment() {
+            return Some(binaries);
+        }
+        let repositories = RepositoryPaths::from_environment()?;
+        Some(Self {
             message_cli: CargoBinary::build(repositories.message(), "message"),
             message_daemon: CargoBinary::build(repositories.message(), "message-daemon"),
             router_daemon: CargoBinary::build(repositories.router(), "router-daemon"),
-        }
+        })
+    }
+
+    fn from_binary_environment() -> Option<Self> {
+        Some(Self {
+            message_cli: PathBuf::from(std::env::var_os("MESSAGE_CLI_BINARY")?),
+            message_daemon: PathBuf::from(std::env::var_os("MESSAGE_DAEMON_BINARY")?),
+            router_daemon: PathBuf::from(std::env::var_os("ROUTER_DAEMON_BINARY")?),
+        })
     }
 
     fn message_cli(&self) -> &Path {
@@ -327,14 +346,19 @@ struct RepositoryPaths {
 }
 
 impl RepositoryPaths {
-    fn from_environment() -> Self {
-        Self {
+    fn from_environment() -> Option<Self> {
+        let paths = Self {
             message: std::env::var_os("MESSAGE_REPOSITORY")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("/git/github.com/LiGoldragon/message")),
             router: std::env::var_os("ROUTER_REPOSITORY")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("/git/github.com/LiGoldragon/router")),
+        };
+        if paths.message.join("Cargo.toml").exists() && paths.router.join("Cargo.toml").exists() {
+            Some(paths)
+        } else {
+            None
         }
     }
 
@@ -392,6 +416,89 @@ impl Drop for ManagedProcess {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TerminalFixtureFrameCodec {
+    maximum_frame_bytes: usize,
+}
+
+impl TerminalFixtureFrameCodec {
+    fn read_frame(
+        &self,
+        stream: &mut std::os::unix::net::UnixStream,
+    ) -> harness::Result<TerminalFrame> {
+        let mut prefix = [0_u8; 4];
+        std::io::Read::read_exact(stream, &mut prefix)?;
+        let length = u32::from_be_bytes(prefix) as usize;
+        if length > self.maximum_frame_bytes {
+            return Err(harness::Error::UnexpectedSignalFrame {
+                got: format!("terminal frame length {length} exceeds maximum"),
+            });
+        }
+        let mut bytes = Vec::with_capacity(4 + length);
+        bytes.extend_from_slice(&prefix);
+        bytes.resize(4 + length, 0);
+        std::io::Read::read_exact(stream, &mut bytes[4..])?;
+        Ok(TerminalFrame::decode_length_prefixed(bytes.as_slice())?)
+    }
+
+    fn read_request(
+        &self,
+        stream: &mut std::os::unix::net::UnixStream,
+    ) -> harness::Result<ReceivedTerminalRequest> {
+        match self.read_frame(stream)?.into_body() {
+            TerminalFrameBody::Request { exchange, request } => {
+                let checked = request
+                    .into_checked()
+                    .map_err(|(reason, _)| harness::Error::InvalidSignalRequest { reason })?;
+                let operation = checked.operations.into_head();
+                Ok(ReceivedTerminalRequest {
+                    exchange,
+                    verb: operation.verb,
+                    request: operation.payload,
+                })
+            }
+            other => Err(harness::Error::UnexpectedSignalFrame {
+                got: format!("{other:?}"),
+            }),
+        }
+    }
+
+    fn write_reply(
+        &self,
+        stream: &mut std::os::unix::net::UnixStream,
+        exchange: ExchangeIdentifier,
+        verb: SignalVerb,
+        reply: TerminalReply,
+    ) -> harness::Result<()> {
+        let frame = TerminalFrame::new(TerminalFrameBody::Reply {
+            exchange,
+            reply: Reply::completed(NonEmpty::single(SubReply::Ok {
+                verb,
+                payload: reply,
+            })),
+        });
+        let bytes = frame.encode_length_prefixed()?;
+        stream.write_all(&bytes)?;
+        stream.flush()?;
+        Ok(())
+    }
+}
+
+impl Default for TerminalFixtureFrameCodec {
+    fn default() -> Self {
+        Self {
+            maximum_frame_bytes: 1024 * 1024,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReceivedTerminalRequest {
+    exchange: ExchangeIdentifier,
+    verb: SignalVerb,
+    request: TerminalRequest,
+}
+
 struct RecordingTerminalSocket {
     path: PathBuf,
     received: Receiver<Vec<u8>>,
@@ -408,11 +515,11 @@ impl RecordingTerminalSocket {
         let (sender, received) = channel();
         thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("terminal socket accepts input");
-            let codec = TerminalSupervisorFrameCodec::default();
-            let request = codec
+            let codec = TerminalFixtureFrameCodec::default();
+            let received_request = codec
                 .read_request(&mut stream)
                 .expect("terminal socket reads Signal input request");
-            match request {
+            match received_request.request {
                 TerminalRequest::TerminalInput(input) => {
                     sender
                         .send(input.bytes.as_slice().to_vec())
@@ -420,6 +527,8 @@ impl RecordingTerminalSocket {
                     codec
                         .write_reply(
                             &mut stream,
+                            received_request.exchange,
+                            received_request.verb,
                             TerminalReply::TerminalInputAccepted(TerminalInputAccepted {
                                 terminal: input.terminal,
                                 generation: TerminalGeneration::new(1),
@@ -471,11 +580,11 @@ impl ReplyingTerminalSocket {
         let (reply_sender, reply_output) = channel();
         thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("terminal socket accepts input");
-            let codec = TerminalSupervisorFrameCodec::default();
-            let request = codec
+            let codec = TerminalFixtureFrameCodec::default();
+            let received_request = codec
                 .read_request(&mut stream)
                 .expect("terminal socket reads Signal input request");
-            match request {
+            match received_request.request {
                 TerminalRequest::TerminalInput(input) => {
                     sender
                         .send(input.bytes.as_slice().to_vec())
@@ -483,6 +592,8 @@ impl ReplyingTerminalSocket {
                     codec
                         .write_reply(
                             &mut stream,
+                            received_request.exchange,
+                            received_request.verb,
                             TerminalReply::TerminalInputAccepted(TerminalInputAccepted {
                                 terminal: input.terminal,
                                 generation: TerminalGeneration::new(1),

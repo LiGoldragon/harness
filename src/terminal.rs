@@ -1,9 +1,14 @@
+use std::io::{BufReader, Read, Write};
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 
-use persona_terminal::contract::TerminalTransportBinding;
+use signal_core::{
+    ExchangeIdentifier, ExchangeLane, LaneSequence, Reply, Request, SessionEpoch, SignalVerb,
+    SubReply,
+};
 use signal_persona_terminal::{
-    TerminalCapture, TerminalInput, TerminalInputBytes, TerminalName, TerminalReply,
-    TerminalRequest,
+    TerminalCapture, TerminalFrame, TerminalFrameBody, TerminalInput, TerminalInputBytes,
+    TerminalName, TerminalReply, TerminalRequest,
 };
 
 use crate::{HarnessIdentifier, Result};
@@ -150,11 +155,10 @@ impl HarnessTerminalDelivery {
         text: &str,
         path: &Path,
     ) -> Result<TerminalDeliveryReceipt> {
-        let mut transport =
-            TerminalTransportBinding::from_socket_path(binding.terminal().clone(), path);
         let mut bytes = text.as_bytes().to_vec();
         bytes.push(b'\r');
-        let accepted_event = transport.handle_request(binding.input_request(bytes))?;
+        let accepted_event = TerminalSignalTransport::new(path)
+            .exchange(binding.input_request(bytes), self.delivered_input_count)?;
         let delivered = matches!(accepted_event, TerminalReply::TerminalInputAccepted(_));
         if delivered {
             self.delivered_input_count = self.delivered_input_count.saturating_add(1);
@@ -163,5 +167,68 @@ impl HarnessTerminalDelivery {
             delivered,
             accepted_event,
         ))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TerminalSignalTransport {
+    socket_path: PathBuf,
+}
+
+impl TerminalSignalTransport {
+    fn new(socket_path: &Path) -> Self {
+        Self {
+            socket_path: socket_path.to_path_buf(),
+        }
+    }
+
+    fn exchange(&self, request: TerminalRequest, sequence: u64) -> Result<TerminalReply> {
+        let mut stream = UnixStream::connect(&self.socket_path)?;
+        let exchange = ExchangeIdentifier::new(
+            SessionEpoch::new(0),
+            ExchangeLane::Connector,
+            LaneSequence::new(sequence.saturating_add(1)),
+        );
+        let request = Request::from_payload(request);
+        let verb = request.operations().head().verb;
+        let frame = TerminalFrame::new(TerminalFrameBody::Request { exchange, request });
+        stream.write_all(&frame.encode_length_prefixed()?)?;
+        stream.flush()?;
+
+        let mut reader = BufReader::new(stream);
+        match self.read_reply_frame(&mut reader)?.into_body() {
+            TerminalFrameBody::Reply { reply, .. } => Self::terminal_reply(reply, verb),
+            other => Err(crate::Error::UnexpectedSignalFrame {
+                got: format!("{other:?}"),
+            }),
+        }
+    }
+
+    fn read_reply_frame(&self, reader: &mut impl Read) -> Result<TerminalFrame> {
+        let mut prefix = [0_u8; 4];
+        reader.read_exact(&mut prefix)?;
+        let length = u32::from_be_bytes(prefix) as usize;
+        let mut bytes = Vec::with_capacity(4 + length);
+        bytes.extend_from_slice(&prefix);
+        bytes.resize(4 + length, 0);
+        reader.read_exact(&mut bytes[4..])?;
+        Ok(TerminalFrame::decode_length_prefixed(&bytes)?)
+    }
+
+    fn terminal_reply(reply: Reply<TerminalReply>, verb: SignalVerb) -> Result<TerminalReply> {
+        match reply {
+            Reply::Accepted { per_operation, .. } => match per_operation.into_head() {
+                SubReply::Ok {
+                    verb: reply_verb,
+                    payload,
+                } if reply_verb == verb => Ok(payload),
+                other => Err(crate::Error::UnexpectedSignalFrame {
+                    got: format!("{other:?}"),
+                }),
+            },
+            Reply::Rejected { reason } => Err(crate::Error::UnexpectedSignalFrame {
+                got: format!("{reason:?}"),
+            }),
+        }
     }
 }

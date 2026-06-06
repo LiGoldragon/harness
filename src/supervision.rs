@@ -9,12 +9,12 @@ use kameo::error::Infallible;
 use kameo::message::{Context, Message};
 use signal_frame::{ExchangeIdentifier, NonEmpty, Reply, SubReply};
 use signal_persona::engine_management::{
-    Frame as SupervisionFrame, FrameBody, Operation as SupervisionRequest,
+    Frame as SupervisionFrame, FrameBody, Operation as SupervisionRequest, Presence,
     Query as SupervisionQuery, Reply as SupervisionReply,
 };
 use signal_persona::{
     ComponentHealth, ComponentHealthReport, ComponentIdentity, ComponentKind, ComponentName,
-    ComponentReady, EngineManagementProtocolVersion, Presence, StopAcknowledgement,
+    ComponentReady, EngineManagementProtocolVersion, StopAcknowledgement,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]

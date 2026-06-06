@@ -1,6 +1,8 @@
 pub mod daemon;
+pub mod delivery;
 pub mod error;
 pub mod harness;
+pub mod pi;
 pub mod runtime;
 pub mod subscription;
 pub mod supervision;
@@ -11,10 +13,12 @@ pub use daemon::{
     BoundHarnessDaemon, HarnessConnection, HarnessDaemon, HarnessFrameCodec, HarnessRequestHandler,
     SocketMode,
 };
+pub use delivery::{HarnessDeliveryAdapter, HarnessDeliveryReceipt};
 pub use error::{Error, Result};
 pub use harness::{
     HarnessBinding, HarnessIdentifier, HarnessIdentityProjection, HarnessIdentityView, HarnessKind,
 };
+pub use pi::{PiRpcDeliveryCommand, PiRpcDeliveryReceipt, PiRpcProcessConfiguration, PiRpcSession};
 pub use runtime::{
     Harness, HarnessLifecycle, HarnessState, ReadState, RecordTranscriptLine, SetHarnessLifecycle,
 };

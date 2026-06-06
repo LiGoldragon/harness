@@ -9,6 +9,9 @@ Rules for work here:
 - Keep routing policy in `persona-router`.
 - Keep OS/window-manager observations in `persona-system`.
 - Keep durable PTY and viewer transport in `persona-terminal`.
+- Use the Pi RPC/JSONL adapter for Pi programmatic intake; do not force Pi
+  through terminal injection when the daemon has a typed Pi adapter
+  configuration.
 - Model harness capabilities as typed values, not strings.
 - Project harness identity through typed read views. Do not return full binding
   records to every caller, and do not treat the projection enum as an

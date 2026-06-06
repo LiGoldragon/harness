@@ -217,7 +217,9 @@ fn terminal_delivery_cannot_use_retired_transport_or_sleep_verification() {
         );
     }
 
-    assert!(source.contains("persona_terminal::contract::TerminalTransportBinding"));
+    assert!(!source.contains("persona_terminal::contract::TerminalTransportBinding"));
+    assert!(source.contains("TerminalFrame::new"));
+    assert!(source.contains("TerminalFrameBody::Request"));
     assert!(source.contains("TerminalReply::TerminalInputAccepted"));
 }
 
