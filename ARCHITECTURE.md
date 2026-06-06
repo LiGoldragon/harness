@@ -248,6 +248,7 @@ tests/            harness smoke and actor-runtime constraint tests
 | Harness daemon opens a transcript subscription, returns a typed snapshot, and pushes typed deltas. | `nix flake check .#harness-daemon-pushes-transcript-deltas-after-subscribe` |
 | A subscriber receives the final `HarnessSubscriptionRetracted` ack carrying the same token before the stream ends. | `nix flake check .#harness-daemon-emits-final-subscription-retracted-ack` |
 | A slow subscriber does not stall transcript-delta delivery to a sibling subscription. | `nix flake check .#harness-daemon-slow-subscriber-does-not-block-siblings` |
+| Real message ingress reaches a Pi-kind harness through real message/router/harness daemons before terminal adapter delivery. | `cargo test --test message_router_harness_e2e` |
 
 ## See Also
 

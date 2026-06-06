@@ -1,7 +1,7 @@
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::mpsc::{Receiver, channel};
 use std::thread;
@@ -557,7 +557,7 @@ fn write_supervision_request(stream: &mut UnixStream, request: SupervisionReques
     stream.flush().expect("supervision request flushes");
 }
 
-fn wait_for_socket(socket: &PathBuf) {
+fn wait_for_socket(socket: &Path) {
     let started = Instant::now();
     while started.elapsed() < Duration::from_secs(5) {
         if socket.exists() {

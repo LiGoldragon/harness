@@ -32,5 +32,10 @@ tokio                   = { version = "1", features = ["rt-multi-thread", "macro
 
 [lints.rust]
 unsafe_code = "forbid"
-unused = "warn"
+unused = { level = "warn", priority = -1 }
 dead_code = "warn"
+
+[dev-dependencies]
+message       = { git = "https://github.com/LiGoldragon/message.git", branch = "main" }
+signal-router = { git = "https://github.com/LiGoldragon/signal-router.git", branch = "main" }
+tempfile      = "3"
