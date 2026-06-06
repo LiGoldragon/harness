@@ -22,23 +22,28 @@ use signal_router::{
 };
 use tempfile::TempDir;
 
+const AGENT_A: &str = "agent-a";
+const AGENT_B: &str = "agent-b";
+
 #[test]
-fn message_cli_reaches_pi_harness_through_real_message_and_router_daemons() {
+fn message_cli_round_trips_between_two_harness_agents_through_real_daemons() {
     let test = MessageRouterHarnessE2e::new();
 
-    let harness_daemon = test.spawn_harness_daemon();
+    let agent_a_harness = test.spawn_harness_daemon(AGENT_A, test.agent_a_terminal().path());
+    let agent_b_harness = test.spawn_harness_daemon(AGENT_B, test.agent_b_terminal().path());
     let router_daemon = test.spawn_router_daemon();
-    let message_daemon = test.spawn_message_daemon();
+    let agent_a_message_daemon = test.spawn_message_daemon(AGENT_A);
+    let agent_b_message_daemon = test.spawn_message_daemon(AGENT_B);
 
     let output = Command::new(test.binaries().message_cli())
-        .env("MESSAGE_SOCKET", test.message_socket())
-        .arg("(Send operator [full route to pi harness])")
+        .env("MESSAGE_SOCKET", test.message_socket(AGENT_A))
+        .arg("(Send agent-b [question from agent a])")
         .output()
-        .expect("run message CLI");
+        .expect("run agent A message CLI");
 
     assert!(
         output.status.success(),
-        "message CLI failed\nstdout:\n{}\nstderr:\n{}",
+        "agent A message CLI failed\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
@@ -50,30 +55,52 @@ fn message_cli_reaches_pi_harness_through_real_message_and_router_daemons() {
         other => panic!("expected SubmissionAccepted, got {other:?}"),
     }
 
-    let terminal_text = test.terminal().received_text();
+    let agent_b_text = test.agent_b_terminal().received_text();
     assert!(
-        terminal_text.contains("full route to pi harness"),
-        "terminal endpoint did not receive routed message body: {terminal_text:?}"
+        agent_b_text.contains("question from agent a"),
+        "agent B terminal did not receive routed message body: {agent_b_text:?}"
+    );
+    match test.agent_b_terminal().reply_output() {
+        MessageCommandOutput::SubmissionAccepted(acceptance) => {
+            assert_eq!(acceptance.message_slot, 2);
+        }
+        other => panic!("expected agent B reply SubmissionAccepted, got {other:?}"),
+    }
+
+    let agent_a_text = test.agent_a_terminal().received_text();
+    assert!(
+        agent_a_text.contains("response from agent b"),
+        "agent A terminal did not receive response body: {agent_a_text:?}"
     );
 
-    drop(message_daemon);
+    drop(agent_b_message_daemon);
+    drop(agent_a_message_daemon);
     drop(router_daemon);
-    drop(harness_daemon);
+    drop(agent_b_harness);
+    drop(agent_a_harness);
 }
 
 struct MessageRouterHarnessE2e {
     root: TempDir,
-    terminal: TerminalAcceptanceSocket,
+    agent_a_terminal: RecordingTerminalSocket,
+    agent_b_terminal: ReplyingTerminalSocket,
     binaries: ExternalBinaries,
 }
 
 impl MessageRouterHarnessE2e {
     fn new() -> Self {
         let root = TempDir::new().expect("tempdir");
+        let binaries = ExternalBinaries::build();
+        let agent_b_message_socket = Self::message_socket_for(root.path(), AGENT_B);
         Self {
+            agent_a_terminal: RecordingTerminalSocket::new("agent-a"),
+            agent_b_terminal: ReplyingTerminalSocket::new(
+                "agent-b",
+                binaries.message_cli().to_path_buf(),
+                agent_b_message_socket,
+            ),
             root,
-            terminal: TerminalAcceptanceSocket::new("message-router-harness"),
-            binaries: ExternalBinaries::build(),
+            binaries,
         }
     }
 
@@ -92,16 +119,21 @@ impl MessageRouterHarnessE2e {
         &self.binaries
     }
 
-    fn terminal(&self) -> &TerminalAcceptanceSocket {
-        &self.terminal
+    fn agent_a_terminal(&self) -> &RecordingTerminalSocket {
+        &self.agent_a_terminal
     }
 
-    fn harness_socket(&self) -> PathBuf {
-        self.root_path().join("harness.sock")
+    fn agent_b_terminal(&self) -> &ReplyingTerminalSocket {
+        &self.agent_b_terminal
     }
 
-    fn harness_supervision_socket(&self) -> PathBuf {
-        self.root_path().join("harness-supervision.sock")
+    fn harness_socket(&self, actor: &str) -> PathBuf {
+        self.root_path().join(format!("{actor}-harness.sock"))
+    }
+
+    fn harness_supervision_socket(&self, actor: &str) -> PathBuf {
+        self.root_path()
+            .join(format!("{actor}-harness-supervision.sock"))
     }
 
     fn router_socket(&self) -> PathBuf {
@@ -116,22 +148,26 @@ impl MessageRouterHarnessE2e {
         self.root_path().join("router-supervision.sock")
     }
 
-    fn message_socket(&self) -> PathBuf {
-        self.root_path().join("message.sock")
+    fn message_socket(&self, actor: &str) -> PathBuf {
+        Self::message_socket_for(self.root_path(), actor)
     }
 
-    fn spawn_harness_daemon(&self) -> ManagedProcess {
-        let harness_socket = self.harness_socket();
-        let supervision_socket = self.harness_supervision_socket();
-        let configuration_path = self.root_path().join("harness.nota");
+    fn message_socket_for(root: &Path, actor: &str) -> PathBuf {
+        root.join(format!("{actor}-message.sock"))
+    }
+
+    fn spawn_harness_daemon(&self, actor: &str, terminal_socket: &Path) -> ManagedProcess {
+        let harness_socket = self.harness_socket(actor);
+        let supervision_socket = self.harness_supervision_socket(actor);
+        let configuration_path = self.root_path().join(format!("{actor}-harness.nota"));
         let configuration = HarnessDaemonConfiguration {
             harness_socket_path: WirePath::new(harness_socket.display().to_string()),
             harness_socket_mode: WireSocketMode::new(0o600),
             supervision_socket_path: WirePath::new(supervision_socket.display().to_string()),
             supervision_socket_mode: WireSocketMode::new(0o600),
-            harness_name: HarnessName::new("operator"),
+            harness_name: HarnessName::new(actor),
             harness_kind: HarnessKind::Pi,
-            terminal_socket_path: Some(WirePath::new(self.terminal.path().display().to_string())),
+            terminal_socket_path: Some(WirePath::new(terminal_socket.display().to_string())),
             owner_identity: OwnerIdentity::UnixUser(UnixUserIdentifier::new(self.current_uid())),
         };
         NotaFile::write(&configuration_path, &configuration);
@@ -147,7 +183,11 @@ impl MessageRouterHarnessE2e {
 
     fn spawn_router_daemon(&self) -> ManagedProcess {
         let bootstrap_path = self.root_path().join("router-bootstrap.nota");
-        BootstrapFile::write(&bootstrap_path, &self.harness_socket());
+        BootstrapFile::write(
+            &bootstrap_path,
+            &self.harness_socket(AGENT_A),
+            &self.harness_socket(AGENT_B),
+        );
         let configuration_path = self.root_path().join("router.nota");
         let router_socket = self.router_socket();
         let meta_socket = self.router_meta_socket();
@@ -175,13 +215,13 @@ impl MessageRouterHarnessE2e {
         process
     }
 
-    fn spawn_message_daemon(&self) -> ManagedProcess {
-        let configuration_path = self.root_path().join("message.rkyv");
+    fn spawn_message_daemon(&self, actor: &str) -> ManagedProcess {
+        let configuration_path = self.root_path().join(format!("{actor}-message.rkyv"));
         MessageConfiguration::new(
-            self.message_socket(),
+            self.message_socket(actor),
             self.router_socket(),
             self.root_path().join("message.unused"),
-            "owner",
+            actor,
             self.current_uid(),
         )
         .write_binary_file(&configuration_path)
@@ -191,7 +231,7 @@ impl MessageRouterHarnessE2e {
             self.binaries.message_daemon(),
             &[configuration_path],
         );
-        SocketWait::new(&self.message_socket()).wait();
+        SocketWait::new(&self.message_socket(actor)).wait();
         process
     }
 }
@@ -199,20 +239,33 @@ impl MessageRouterHarnessE2e {
 struct BootstrapFile;
 
 impl BootstrapFile {
-    fn write(path: &Path, harness_socket: &Path) {
+    fn write(path: &Path, agent_a_harness_socket: &Path, agent_b_harness_socket: &Path) {
         let document = RouterBootstrapDocument::new(vec![
             RouterBootstrapOperation::RegisterActor(RegisterActor::new(Actor::new(
-                ActorIdentifier::new("operator"),
+                ActorIdentifier::new(AGENT_A),
                 std::process::id(),
                 Some(EndpointTransport::new(
                     EndpointKind::HarnessSocket,
-                    harness_socket.display().to_string(),
+                    agent_a_harness_socket.display().to_string(),
+                    None,
+                )),
+            ))),
+            RouterBootstrapOperation::RegisterActor(RegisterActor::new(Actor::new(
+                ActorIdentifier::new(AGENT_B),
+                std::process::id(),
+                Some(EndpointTransport::new(
+                    EndpointKind::HarnessSocket,
+                    agent_b_harness_socket.display().to_string(),
                     None,
                 )),
             ))),
             RouterBootstrapOperation::GrantDirectMessage(GrantDirectMessage::new(
-                ActorIdentifier::new("owner"),
-                ActorIdentifier::new("operator"),
+                ActorIdentifier::new(AGENT_A),
+                ActorIdentifier::new(AGENT_B),
+            )),
+            RouterBootstrapOperation::GrantDirectMessage(GrantDirectMessage::new(
+                ActorIdentifier::new(AGENT_B),
+                ActorIdentifier::new(AGENT_A),
             )),
         ]);
         std::fs::write(
@@ -339,12 +392,12 @@ impl Drop for ManagedProcess {
     }
 }
 
-struct TerminalAcceptanceSocket {
+struct RecordingTerminalSocket {
     path: PathBuf,
     received: Receiver<Vec<u8>>,
 }
 
-impl TerminalAcceptanceSocket {
+impl RecordingTerminalSocket {
     fn new(name: &str) -> Self {
         let path = std::env::temp_dir().join(format!(
             "harness-terminal-{name}-{}-{}.sock",
@@ -394,7 +447,98 @@ impl TerminalAcceptanceSocket {
     }
 }
 
-impl Drop for TerminalAcceptanceSocket {
+impl Drop for RecordingTerminalSocket {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+struct ReplyingTerminalSocket {
+    path: PathBuf,
+    received: Receiver<Vec<u8>>,
+    reply_output: Receiver<MessageCommandOutput>,
+}
+
+impl ReplyingTerminalSocket {
+    fn new(name: &str, message_cli: PathBuf, message_socket: PathBuf) -> Self {
+        let path = std::env::temp_dir().join(format!(
+            "harness-terminal-{name}-{}-{}.sock",
+            std::process::id(),
+            UniqueNanos::now()
+        ));
+        let listener = UnixListener::bind(&path).expect("terminal acceptance socket binds");
+        let (sender, received) = channel();
+        let (reply_sender, reply_output) = channel();
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("terminal socket accepts input");
+            let codec = TerminalSupervisorFrameCodec::default();
+            let request = codec
+                .read_request(&mut stream)
+                .expect("terminal socket reads Signal input request");
+            match request {
+                TerminalRequest::TerminalInput(input) => {
+                    sender
+                        .send(input.bytes.as_slice().to_vec())
+                        .expect("terminal socket reports bytes");
+                    codec
+                        .write_reply(
+                            &mut stream,
+                            TerminalReply::TerminalInputAccepted(TerminalInputAccepted {
+                                terminal: input.terminal,
+                                generation: TerminalGeneration::new(1),
+                            }),
+                        )
+                        .expect("terminal socket writes Signal acceptance");
+                    let output = Command::new(message_cli)
+                        .env("MESSAGE_SOCKET", message_socket)
+                        .arg("(Send agent-a [response from agent b])")
+                        .output()
+                        .expect("run agent B message CLI");
+                    assert!(
+                        output.status.success(),
+                        "agent B message CLI failed\nstdout:\n{}\nstderr:\n{}",
+                        String::from_utf8_lossy(&output.stdout),
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                    let stdout = String::from_utf8(output.stdout)
+                        .expect("agent B message CLI stdout is utf8");
+                    let reply = MessageCommandOutput::from_nota(stdout.trim())
+                        .expect("decode agent B message CLI NOTA output");
+                    reply_sender
+                        .send(reply)
+                        .expect("terminal socket reports reply CLI output");
+                }
+                other => panic!("expected TerminalInput request, got {other:?}"),
+            }
+        });
+        Self {
+            path,
+            received,
+            reply_output,
+        }
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+
+    fn received_text(&self) -> String {
+        String::from_utf8(
+            self.received
+                .recv_timeout(Duration::from_secs(15))
+                .expect("terminal socket receives input bytes"),
+        )
+        .expect("terminal input is utf8")
+    }
+
+    fn reply_output(&self) -> MessageCommandOutput {
+        self.reply_output
+            .recv_timeout(Duration::from_secs(15))
+            .expect("terminal socket receives reply CLI output")
+    }
+}
+
+impl Drop for ReplyingTerminalSocket {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.path);
     }

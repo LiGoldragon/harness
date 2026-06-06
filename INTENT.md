@@ -33,7 +33,10 @@ capabilities are explicit typed records, not stringly flags. Only the `FixtureOn
 endpoint may complete without sending bytes to terminal transport; production delivery
 counts an input as delivered only after the terminal accepts the bytes, and reports typed
 `DeliveryFailed` when no terminal endpoint is available. The daemon accepts only
-length-prefixed `signal-harness` frames. When durable harness history is needed, the
-harness actor opens its own `harness.redb` through a harness-owned Sema layer and
-sequences its own writes — no shared cross-component database, and no write ownership over
-any other component's Sema layer.
+length-prefixed `signal-harness` frames. The message-routing e2e witness must exercise a
+real request and reply path through real `message-daemon`, `router-daemon`, and two
+`harness-daemon` instances before it can be described as a round-trip daemon witness; a
+single routed delivery into an acceptance socket is only a one-way routing witness. When
+durable harness history is needed, the harness actor opens its own `harness.redb` through
+a harness-owned Sema layer and sequences its own writes — no shared cross-component
+database, and no write ownership over any other component's Sema layer.

@@ -448,7 +448,7 @@ dependencies = [
 [[package]]
 name = "message"
 version = "0.1.0"
-source = "git+https://github.com/LiGoldragon/message.git?branch=main#11f46260d4aed5566d4280ec294e0c55a6c05287"
+source = "git+https://github.com/LiGoldragon/message.git?branch=main#f7a38f4ce53dbb5f210ee0c4253952cb21f4d55e"
 dependencies = [
  "nota-codec",
  "rkyv",

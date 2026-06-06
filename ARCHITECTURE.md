@@ -195,6 +195,11 @@ This repo does not own:
   the input bytes.
 - The daemon reports typed `DeliveryFailed` when no terminal endpoint is
   available.
+- The message-routing e2e witness is a round-trip only when a real first
+  `message` CLI call reaches another harness through real `message-daemon`,
+  `router-daemon`, and `harness-daemon` processes, the receiving endpoint sends
+  a reply through its own real `message` CLI and message daemon, and the first
+  harness receives that response.
 - The daemon answers `HarnessStatusQuery` with typed health and readiness.
 - The daemon returns `HarnessRequestUnimplemented` for valid contract
   operations that are not built yet.
@@ -248,7 +253,7 @@ tests/            harness smoke and actor-runtime constraint tests
 | Harness daemon opens a transcript subscription, returns a typed snapshot, and pushes typed deltas. | `nix flake check .#harness-daemon-pushes-transcript-deltas-after-subscribe` |
 | A subscriber receives the final `HarnessSubscriptionRetracted` ack carrying the same token before the stream ends. | `nix flake check .#harness-daemon-emits-final-subscription-retracted-ack` |
 | A slow subscriber does not stall transcript-delta delivery to a sibling subscription. | `nix flake check .#harness-daemon-slow-subscriber-does-not-block-siblings` |
-| Real message ingress reaches a Pi-kind harness through real message/router/harness daemons before terminal adapter delivery. | `cargo test --test message_router_harness_e2e` |
+| A real `message` CLI call reaches a second Pi-kind harness through real message/router/harness daemons, the receiving endpoint replies through its own real `message` CLI and daemon, and the first harness receives the response. | `cargo test --test message_router_harness_e2e` |
 
 ## See Also
 
