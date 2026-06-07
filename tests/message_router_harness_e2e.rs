@@ -10,7 +10,6 @@ use std::{
 
 use harness::HarnessDaemonConfigurationFile;
 use message::{Configuration as MessageConfiguration, command::Output as MessageCommandOutput};
-use nota_codec::{Encoder, NotaEncode};
 use signal_core::{ExchangeIdentifier, NonEmpty, Reply, SignalVerb, SubReply};
 use signal_harness::{
     HarnessDaemonConfiguration, HarnessInstanceConfiguration, HarnessKind, HarnessName,
@@ -206,9 +205,9 @@ impl MessageRouterHarnessE2e {
     }
 
     fn spawn_router_daemon(&self) -> ManagedProcess {
-        let bootstrap_path = self.root_path().join("router-bootstrap.nota");
+        let bootstrap_path = self.root_path().join("router-bootstrap.rkyv");
         BootstrapFile::write(&bootstrap_path, &self.harness_socket());
-        let configuration_path = self.root_path().join("router.nota");
+        let configuration_path = self.root_path().join("router.rkyv");
         let router_socket = self.router_socket();
         let meta_socket = self.router_meta_socket();
         let supervision_socket = self.router_supervision_socket();
@@ -219,11 +218,11 @@ impl MessageRouterHarnessE2e {
             meta_router_socket_mode: WireSocketMode::new(0o600),
             supervision_socket_path: WirePath::new(supervision_socket.display().to_string()),
             supervision_socket_mode: WireSocketMode::new(0o600),
-            store_path: WirePath::new(self.root_path().join("router.redb").display().to_string()),
+            store_path: WirePath::new(self.root_path().join("router.sema").display().to_string()),
             bootstrap_path: Some(WirePath::new(bootstrap_path.display().to_string())),
             owner_identity: OwnerIdentity::UnixUser(UnixUserIdentifier::new(self.current_uid())),
         };
-        NotaFile::write(&configuration_path, &configuration);
+        RouterConfigurationFile::write(&configuration_path, &configuration);
         let process = ManagedProcess::spawn(
             "router-daemon",
             self.binaries.router_daemon(),
@@ -288,27 +287,19 @@ impl BootstrapFile {
                 ActorIdentifier::new(AGENT_A),
             )),
         ]);
-        std::fs::write(
-            path,
-            document
-                .to_nota_lines()
-                .expect("encode router bootstrap document"),
-        )
-        .expect("write router bootstrap document");
+        let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&document)
+            .expect("encode router bootstrap archive");
+        std::fs::write(path, bytes.as_ref()).expect("write router bootstrap archive");
     }
 }
 
-struct NotaFile;
+struct RouterConfigurationFile;
 
-impl NotaFile {
-    fn write<T: NotaEncode>(path: &Path, value: &T) {
-        let mut encoder = Encoder::new();
-        value
-            .encode(&mut encoder)
-            .expect("encode NOTA configuration");
-        let mut text = encoder.into_string();
-        text.push('\n');
-        std::fs::write(path, text).expect("write NOTA configuration");
+impl RouterConfigurationFile {
+    fn write(path: &Path, configuration: &RouterDaemonConfiguration) {
+        let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(configuration)
+            .expect("encode router configuration archive");
+        std::fs::write(path, bytes.as_ref()).expect("write router configuration archive");
     }
 }
 
