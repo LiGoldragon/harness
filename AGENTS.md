@@ -20,4 +20,5 @@ input observations, and adapter contracts for interactive agent harnesses.
 - Do not inject through the same stream a human is typing into unless an input
   gate proves the buffer is safe. The router decides delivery; harness objects
   perform the adapter-specific action.
-- Durable harness state uses `Sema + rkyv` when this crate owns it.
+- Durable harness state uses a harness-owned `harness.sema` store through
+  `sema-engine` when this crate owns it.

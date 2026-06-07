@@ -32,10 +32,9 @@ they happen; observation flow is push, never poll. Transitional: the
 runtime's internal `transcript_event_count` is a sequencing counter, not
 the observation surface; the typed observation stream is.
 
-> **Scope.** Any "sema" reference here means today's `sema` library
-> (rename pending → `sema-db`). The eventual `Sema` is broader;
-> today's harness is a realization step. See
-> `~/primary/ESSENCE.md` §"Today and eventually".
+> **Scope.** Harness does not yet need durable history, but when it does the
+> component-owned store is `harness.sema` opened through `sema-engine`; the
+> daemon does not touch raw redb or another component's store.
 
 ## 0 · TL;DR
 
@@ -166,9 +165,9 @@ closed enum. Runtime permission lives in filesystem ACLs plus router
 channel state choreographed by mind.
 
 When durable harness history is needed, the harness actor opens its **own**
-harness Sema file (e.g. `harness.sema`) through a harness-owned Sema layer over the
-workspace's `sema` database library. The harness actor sequences its own
-writes; no shared cross-component database.
+harness Sema file (e.g. `harness.sema`) through a harness-owned Sema layer
+backed by `sema-engine`. The harness actor sequences its own writes; no shared
+cross-component database.
 
 ## 3 · Boundaries
 

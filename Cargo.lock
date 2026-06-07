@@ -332,8 +332,8 @@ checksum = "6b947ae49db0d222b1dbc6b113ce7248a3fc3a6ca21b696717bfc000ba4484d8"
 
 [[package]]
 name = "message"
-version = "0.2.0"
-source = "git+https://github.com/LiGoldragon/message.git?branch=main#aea7dda2d6a7d8b080438f0a95c71b985d42064b"
+version = "0.2.1"
+source = "git+https://github.com/LiGoldragon/message.git?branch=main#8ceb0e64196982d288fad8e6af839b3a42e5ccc7"
 dependencies = [
  "nota-next",
  "rkyv",
@@ -547,8 +547,8 @@ dependencies = [
 
 [[package]]
 name = "schema-rust-next"
-version = "0.2.0"
-source = "git+https://github.com/LiGoldragon/schema-rust-next.git?branch=main#83b3c474b7ab5225d548f551b1ca6e7afd274aeb"
+version = "0.3.0"
+source = "git+https://github.com/LiGoldragon/schema-rust-next.git?branch=main#a35eff74419d03e36720765e09c9e53fe87a3089"
 dependencies = [
  "prettyplease",
  "proc-macro2",
@@ -843,8 +843,8 @@ dependencies = [
 
 [[package]]
 name = "triad-runtime"
-version = "0.4.0"
-source = "git+https://github.com/LiGoldragon/triad-runtime.git?branch=main#26b090b0d8143986e65c70e1966f1a512e003220"
+version = "0.5.0"
+source = "git+https://github.com/LiGoldragon/triad-runtime.git?branch=main#0b1746d47b4f569413e41772eae3aefe6981385b"
 dependencies = [
  "kameo",
  "rustix",
