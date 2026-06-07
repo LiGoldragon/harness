@@ -12,7 +12,7 @@ transcript observations, sequence pointers, and delivery capabilities.
 The Persona-facing terminal contract is `signal-terminal`. The
 destination shape for harness → terminal delivery is a typed
 `signal-terminal` request/reply exchanged as a length-prefixed
-Signal frame on the terminal supervisor socket. The harness runtime
+Signal frame on the terminal signal socket. The harness runtime
 writes the generated `TerminalFrame` directly; it does not depend on the
 retired in-process `terminal` helper crate.
 
@@ -44,11 +44,11 @@ OS-specific focus observation, or terminal durable PTY transport.
 
 ```mermaid
 flowchart LR
-    "persona-router" -->|"delivery request"| "Harness"
+    "router" -->|"delivery request"| "Harness"
     "Harness" -->|"adapter command"| "HarnessAdapter"
     "HarnessAdapter" -->|"TerminalFrame"| "signal-terminal"
     "HarnessAdapter" -->|"Pi RPC JSONL"| "pi --mode rpc"
-    "Harness" -->|"typed observation + sequence pointer"| "persona-router"
+    "Harness" -->|"typed observation + sequence pointer"| "router"
     "Harness" -->|"harness-owned state"| "harness Sema"
 ```
 
@@ -77,7 +77,7 @@ stream.
 
 ## 1.5 · Lifecycle FSM and supervision-relation reception
 
-The harness daemon answers `signal-persona::SupervisionRequest` from a
+The harness daemon answers `signal-engine-management::Operation` from a
 canonical `SupervisionPhase` Kameo actor. The daemon receives exactly one
 startup argument: a `signal_harness::HarnessDaemonConfiguration`
 record supplied as a signal-encoded/rkyv file path. Inline NOTA and `.nota`
@@ -106,7 +106,7 @@ HarnessLifecycle
   | Stopped      -- exited (clean or crash; distinguishable via exit_code)
 ```
 
-Readiness mapping for `SupervisionRequest::ComponentReadinessQuery`:
+Readiness mapping for `Operation::Query(ReadinessStatus)`:
 
 - `Running` and `Paused` → `ComponentReady { component_started_at }`
 - `Starting` and `Stopped` → `ComponentNotReady { reason }`
@@ -184,12 +184,12 @@ This repo owns:
 
 This repo does not own:
 
-- routing decisions (`persona-router`);
-- OS/window focus backend (`persona-system`);
+- routing decisions (`router`);
+- OS/window focus backend (`system`);
 - PTY byte transport (`terminal`);
 - harness wire contract definitions (`signal-harness`);
 - terminal wire contract definitions (`signal-terminal`);
-- the top-level engine-manager contract (`signal-persona`);
+- the top-level engine-management contract (`signal-engine-management`);
 - Pi's internal model/runtime implementation;
 - database write ownership for other components' Sema layers.
 
@@ -288,8 +288,8 @@ tests/            harness smoke and actor-runtime constraint tests
 - `~/primary/skills/subscription-lifecycle.md` — canonical
   five-state FSM the transcript subscription implements.
 
-- `../persona-router/ARCHITECTURE.md`
-- `../persona-system/ARCHITECTURE.md`
+- `../router/ARCHITECTURE.md`
+- `../system/ARCHITECTURE.md`
 - `../terminal/ARCHITECTURE.md`
 - `../sema/ARCHITECTURE.md`
 - `../signal-harness/ARCHITECTURE.md`

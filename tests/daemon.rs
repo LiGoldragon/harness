@@ -12,6 +12,12 @@ use harness::{
     HarnessKind, HarnessRuntimeConfiguration, PiRpcDeliveryCommand, PiRpcProcessConfiguration,
     SocketMode, SupervisionFrameCodec,
 };
+use signal_engine_management::{
+    ComponentHealth, ComponentKind, ComponentName, EngineManagementProtocolVersion,
+    Frame as SupervisionFrame, FrameBody as SupervisionFrameBody, Operation as SupervisionRequest,
+    Presence, Query as SupervisionQuery, Reply as SupervisionReply, SocketMode as WireSocketMode,
+    WirePath,
+};
 use signal_frame::{
     ExchangeIdentifier, ExchangeLane, LaneSequence, NonEmpty, Reply, Request, SessionEpoch,
     SubReply,
@@ -22,14 +28,6 @@ use signal_harness::{
     HarnessName, HarnessOperationKind, HarnessReadiness, HarnessRequest,
     HarnessRequestUnimplemented, HarnessStatus, HarnessStatusQuery, HarnessUnimplementedReason,
     InteractionPrompt, MessageBody, MessageDelivery, MessageSender, MessageSlot,
-};
-use signal_persona::engine_management::{
-    Frame as SupervisionFrame, FrameBody as SupervisionFrameBody, Operation as SupervisionRequest,
-    Presence, Query as SupervisionQuery, Reply as SupervisionReply,
-};
-use signal_persona::{
-    ComponentHealth, ComponentKind, ComponentName, EngineManagementProtocolVersion,
-    SocketMode as WireSocketMode, WirePath,
 };
 use signal_persona_origin::{OwnerIdentity, UnixUserIdentifier};
 use signal_terminal::{
@@ -635,8 +633,8 @@ fn harness_daemon_answers_status_readiness() {
 /// the constraint-test table) for the supervision socket specifically.
 #[test]
 fn harness_daemon_applies_distinctive_spawn_envelope_socket_modes() {
+    use signal_engine_management::{SocketMode as WireSocketMode, WirePath};
     use signal_harness::{HarnessDaemonConfiguration, HarnessKind as ContractHarnessKind};
-    use signal_persona::{SocketMode as WireSocketMode, WirePath};
     use signal_persona_origin::{OwnerIdentity, UnixUserIdentifier};
 
     let fixture = SocketFixture::new("distinctive-socket-modes");
@@ -690,8 +688,8 @@ fn harness_daemon_applies_distinctive_spawn_envelope_socket_modes() {
 
 #[test]
 fn harness_daemon_answers_component_supervision_relation() {
+    use signal_engine_management::{SocketMode as WireSocketMode, WirePath};
     use signal_harness::{HarnessDaemonConfiguration, HarnessKind as ContractHarnessKind};
-    use signal_persona::{SocketMode as WireSocketMode, WirePath};
     use signal_persona_origin::{OwnerIdentity, UnixUserIdentifier};
 
     let fixture = SocketFixture::new("component-supervision");

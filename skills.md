@@ -6,8 +6,8 @@ subscription delivery.
 
 Rules for work here:
 
-- Keep routing policy in `persona-router`.
-- Keep OS/window-manager observations in `persona-system`.
+- Keep routing policy in `router`.
+- Keep OS/window-manager observations in `system`.
 - Keep durable PTY and viewer transport in `terminal`.
 - Use the Pi RPC/JSONL adapter for Pi programmatic intake; do not force Pi
   through terminal injection when the daemon has a typed Pi adapter

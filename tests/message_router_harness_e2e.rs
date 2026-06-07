@@ -10,11 +10,11 @@ use std::{
 
 use harness::HarnessDaemonConfigurationFile;
 use message::{Configuration as MessageConfiguration, command::Output as MessageCommandOutput};
+use signal_engine_management::{SocketMode as WireSocketMode, WirePath};
 use signal_frame::{ExchangeIdentifier, NonEmpty, Reply, SubReply};
 use signal_harness::{
     HarnessDaemonConfiguration, HarnessInstanceConfiguration, HarnessKind, HarnessName,
 };
-use signal_persona::{SocketMode as WireSocketMode, WirePath};
 use signal_persona_origin::{OwnerIdentity, UnixUserIdentifier};
 use signal_router::{
     Actor, ActorIdentifier, EndpointKind, EndpointTransport, GrantDirectMessage, RegisterActor,
@@ -57,8 +57,8 @@ fn message_cli_round_trips_between_two_agents_through_one_harness_daemon() {
     );
     let stdout = String::from_utf8(output.stdout).expect("message CLI stdout is utf8");
     match MessageCommandOutput::from_nota(stdout.trim()).expect("decode message CLI NOTA output") {
-        MessageCommandOutput::SubmissionAccepted(acceptance) => {
-            assert_eq!(acceptance.message_slot, 1);
+        MessageCommandOutput::SubmissionAccepted(message_slot) => {
+            assert_eq!(message_slot, 1);
         }
         other => panic!("expected SubmissionAccepted, got {other:?}"),
     }
@@ -69,8 +69,8 @@ fn message_cli_round_trips_between_two_agents_through_one_harness_daemon() {
         "agent B terminal did not receive routed message body: {agent_b_text:?}"
     );
     match test.agent_b_terminal().reply_output() {
-        MessageCommandOutput::SubmissionAccepted(acceptance) => {
-            assert_eq!(acceptance.message_slot, 2);
+        MessageCommandOutput::SubmissionAccepted(message_slot) => {
+            assert_eq!(message_slot, 2);
         }
         other => panic!("expected agent B reply SubmissionAccepted, got {other:?}"),
     }

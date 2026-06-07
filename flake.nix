@@ -103,12 +103,12 @@
           harness-kind-has-no-command-line-argument-projection = context.cargoTest
             "actor_runtime_truth"
             "harness_kind_has_no_command_line_argument_projection";
-          harness-daemon-accepts-fixture-kind-from-single-nota-configuration-argument =
+          harness-daemon-accepts-fixture-kind-from-single-binary-configuration-argument =
             context.cargoTest "daemon"
-              "harness_daemon_accepts_fixture_kind_from_single_nota_configuration_argument";
-          harness-daemon-accepts-codex-kind-from-single-nota-configuration-argument =
+              "harness_daemon_accepts_fixture_kind_from_single_binary_configuration_argument";
+          harness-daemon-accepts-codex-kind-from-single-binary-configuration-argument =
             context.cargoTest "daemon"
-              "harness_daemon_accepts_codex_kind_from_single_nota_configuration_argument";
+              "harness_daemon_accepts_codex_kind_from_single_binary_configuration_argument";
           harness-daemon-configuration-rejects-multiple-arguments = context.cargoTest
             "daemon"
             "harness_daemon_configuration_rejects_multiple_arguments";
