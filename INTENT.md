@@ -10,20 +10,23 @@ realization step on the eventually-self-hosting stack.
 `HarnessKind` is a closed four-variant schema — production `Codex`, `Claude`, `Pi`, and
 an explicit `Fixture` variant for test harnesses. Later production harnesses become
 explicit schema variants, never `Other { name }` string payloads. `HarnessKind` is not
-argv state: the daemon takes it from a single typed `HarnessDaemonConfiguration` record
-(inline NOTA, `.nota` path, or signal-encoded `.rkyv` path), preserving the closed enum
-while keeping startup inside the single-argument rule. The daemon answers supervision
-through a canonical `SupervisionPhase` actor, binds `harness.sock` at the managed
-spawn-envelope socket mode before accepting traffic, and replies
+argv state: the daemon takes it from a typed `HarnessInstanceConfiguration` inside the
+single `HarnessDaemonConfiguration` startup record (inline NOTA, `.nota` path, or
+signal-encoded `.rkyv` path), preserving the closed enum while keeping startup inside
+the single-argument rule. One `harness-daemon` component process may own multiple
+harness instances internally; per-harness boundaries are actors/adapters, not separate
+daemon processes. The daemon answers supervision through a canonical `SupervisionPhase`
+actor, binds `harness.sock` at the managed spawn-envelope socket mode before accepting
+traffic, and replies
 `HarnessRequestUnimplemented` for valid contract operations not yet built — never a panic
 or untyped text.
 
-Pi harness delivery has a typed RPC/JSONL adapter path. When
-`HarnessDaemonConfiguration` carries a `PiRpcJsonlAdapterConfiguration`, the daemon owns a
-long-lived `pi --mode rpc` process, sends routed messages as the configured
-`prompt`/`steer`/`follow_up` command, and marks delivery completed only after Pi's JSONL
-response accepts the command. This is the programmatic Pi intake path; the terminal
-adapter remains for terminal-backed harnesses and fixtures.
+Pi harness delivery has a typed RPC/JSONL adapter path. When a
+`HarnessInstanceConfiguration` carries a `PiRpcJsonlAdapterConfiguration`, the daemon
+owns a long-lived `pi --mode rpc` process for that harness instance, sends routed
+messages as the configured `prompt`/`steer`/`follow_up` command, and marks delivery
+completed only after Pi's JSONL response accepts the command. This is the programmatic
+Pi intake path; the terminal adapter remains for terminal-backed harnesses and fixtures.
 
 Key constraints: harnesses are first-class records. Harness identity has an explicit
 typed visibility axis (`Full`, `Redacted`, `Hidden`); redaction is typed, not a string
@@ -42,10 +45,10 @@ delivery counts an input as delivered only after the terminal accepts the bytes,
 RPC delivery counts a message as delivered only after the RPC sidecar accepts the command.
 The daemon reports typed `DeliveryFailed` when no adapter endpoint is available. The
 daemon accepts only length-prefixed `signal-harness` frames. The message-routing e2e
-witness must exercise a
-real request and reply path through real `message-daemon`, `router-daemon`, and two
-`harness-daemon` instances before it can be described as a round-trip daemon witness; a
-single routed delivery into an acceptance socket is only a one-way routing witness. When
+witness must exercise a real request and reply path through real `message-daemon`,
+`router-daemon`, and one `harness-daemon` process that owns both harness instances
+before it can be described as a round-trip daemon witness; a single routed delivery into
+an acceptance socket is only a one-way routing witness. When
 durable harness history is needed, the harness actor opens its own `harness.redb` through
 a harness-owned Sema layer and sequences its own writes — no shared cross-component
 database, and no write ownership over any other component's Sema layer.

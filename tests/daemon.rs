@@ -8,8 +8,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use harness::{
-    HarnessDaemon, HarnessFrameCodec, HarnessKind, PiRpcDeliveryCommand, PiRpcProcessConfiguration,
-    SocketMode, SupervisionFrameCodec,
+    HarnessDaemon, HarnessFrameCodec, HarnessKind, HarnessRuntimeConfiguration,
+    PiRpcDeliveryCommand, PiRpcProcessConfiguration, SocketMode, SupervisionFrameCodec,
 };
 use nota_config::ConfigurationSource;
 use signal_core::{
@@ -22,10 +22,10 @@ use signal_frame::{
 };
 use signal_harness::{
     DeliveryCompleted, DeliveryFailed, DeliveryFailureReason, HarnessDaemonConfiguration,
-    HarnessEvent, HarnessFrame, HarnessFrameBody, HarnessHealth, HarnessName, HarnessOperationKind,
-    HarnessReadiness, HarnessRequest, HarnessRequestUnimplemented, HarnessStatus,
-    HarnessStatusQuery, HarnessUnimplementedReason, InteractionPrompt, MessageBody,
-    MessageDelivery, MessageSender, MessageSlot,
+    HarnessEvent, HarnessFrame, HarnessFrameBody, HarnessHealth, HarnessInstanceConfiguration,
+    HarnessName, HarnessOperationKind, HarnessReadiness, HarnessRequest,
+    HarnessRequestUnimplemented, HarnessStatus, HarnessStatusQuery, HarnessUnimplementedReason,
+    InteractionPrompt, MessageBody, MessageDelivery, MessageSender, MessageSlot,
 };
 use signal_persona::engine_management::{
     Frame as SupervisionFrame, FrameBody as SupervisionFrameBody, Operation as SupervisionRequest,
@@ -319,11 +319,8 @@ fn daemon_from_single_nota_configuration_argument(
         harness_socket_mode: WireSocketMode::new(0o600),
         supervision_socket_path: WirePath::new("/tmp/harness.supervision.sock"),
         supervision_socket_mode: WireSocketMode::new(0o600),
-        harness_name: HarnessName::new("operator"),
-        harness_kind,
-        terminal_socket_path: None,
         owner_identity: OwnerIdentity::UnixUser(UnixUserIdentifier::new(1000)),
-        pi_rpc_adapter: None,
+        harnesses: vec![configured_instance("operator", harness_kind)],
     };
     let mut encoder = Encoder::new();
     configuration
@@ -336,6 +333,18 @@ fn daemon_from_single_nota_configuration_argument(
         .expect("configuration decodes");
 
     HarnessDaemon::from_configuration(decoded)
+}
+
+fn configured_instance(
+    harness_name: &str,
+    harness_kind: signal_harness::HarnessKind,
+) -> HarnessInstanceConfiguration {
+    HarnessInstanceConfiguration {
+        harness_name: HarnessName::new(harness_name),
+        harness_kind,
+        terminal_socket_path: None,
+        pi_rpc_adapter: None,
+    }
 }
 
 #[test]
@@ -406,6 +415,80 @@ fn harness_daemon_delivers_message_to_terminal_endpoint() {
         terminal
             .received_text()
             .contains("deliver through harness daemon")
+    );
+}
+
+#[test]
+fn harness_daemon_dispatches_two_harness_instances_inside_one_process() {
+    let fixture = SocketFixture::new("two-instance-dispatch");
+    let operator_terminal = TerminalAcceptanceSocket::new("two-instance-operator");
+    let designer_terminal = TerminalAcceptanceSocket::new("two-instance-designer");
+    let server = HarnessDaemon::from_socket(fixture.socket())
+        .with_harnesses(vec![
+            HarnessRuntimeConfiguration::new(HarnessName::new("operator"), HarnessKind::Fixture)
+                .with_terminal_socket(operator_terminal.path()),
+            HarnessRuntimeConfiguration::new(HarnessName::new("designer"), HarnessKind::Fixture)
+                .with_terminal_socket(designer_terminal.path()),
+        ])
+        .bind()
+        .expect("daemon binds before client connects");
+    let socket = server.socket().clone();
+    let handle = thread::spawn(move || server.serve_requests(2));
+
+    let mut operator_stream = UnixStream::connect(&socket).expect("operator client connects");
+    write_request(
+        &mut operator_stream,
+        MessageDelivery {
+            harness: HarnessName::new("operator"),
+            sender: MessageSender::new("router"),
+            body: MessageBody::new("operator message"),
+            message_slot: MessageSlot::new(11),
+        }
+        .into(),
+    );
+    let operator_event = read_event(&mut operator_stream);
+
+    let mut designer_stream = UnixStream::connect(socket).expect("designer client connects");
+    write_request(
+        &mut designer_stream,
+        MessageDelivery {
+            harness: HarnessName::new("designer"),
+            sender: MessageSender::new("router"),
+            body: MessageBody::new("designer message"),
+            message_slot: MessageSlot::new(12),
+        }
+        .into(),
+    );
+    let designer_event = read_event(&mut designer_stream);
+    let server_events = handle
+        .join()
+        .expect("daemon thread joins")
+        .expect("daemon handles both requests");
+
+    assert_eq!(
+        operator_event,
+        HarnessEvent::DeliveryCompleted(DeliveryCompleted {
+            harness: HarnessName::new("operator"),
+            message_slot: MessageSlot::new(11),
+        })
+    );
+    assert_eq!(
+        designer_event,
+        HarnessEvent::DeliveryCompleted(DeliveryCompleted {
+            harness: HarnessName::new("designer"),
+            message_slot: MessageSlot::new(12),
+        })
+    );
+    assert_eq!(server_events, vec![operator_event, designer_event]);
+    assert!(
+        operator_terminal
+            .received_text()
+            .contains("operator message")
+    );
+    assert!(
+        designer_terminal
+            .received_text()
+            .contains("designer message")
     );
 }
 
@@ -543,9 +626,7 @@ fn harness_daemon_answers_status_readiness() {
 #[test]
 fn harness_daemon_applies_distinctive_spawn_envelope_socket_modes() {
     use nota_codec::{Encoder, NotaEncode};
-    use signal_harness::{
-        HarnessDaemonConfiguration, HarnessKind as ContractHarnessKind, HarnessName,
-    };
+    use signal_harness::{HarnessDaemonConfiguration, HarnessKind as ContractHarnessKind};
     use signal_persona::{SocketMode as WireSocketMode, WirePath};
     use signal_persona_origin::{OwnerIdentity, UnixUserIdentifier};
 
@@ -557,11 +638,11 @@ fn harness_daemon_applies_distinctive_spawn_envelope_socket_modes() {
         harness_socket_mode: WireSocketMode::new(0o640),
         supervision_socket_path: WirePath::new(supervision_socket.display().to_string()),
         supervision_socket_mode: WireSocketMode::new(0o660),
-        harness_name: HarnessName::new("operator"),
-        harness_kind: ContractHarnessKind::Fixture,
-        terminal_socket_path: None,
         owner_identity: OwnerIdentity::UnixUser(UnixUserIdentifier::new(1000)),
-        pi_rpc_adapter: None,
+        harnesses: vec![configured_instance(
+            "operator",
+            ContractHarnessKind::Fixture,
+        )],
     };
     let mut encoder = Encoder::new();
     configuration
@@ -605,9 +686,7 @@ fn harness_daemon_applies_distinctive_spawn_envelope_socket_modes() {
 #[test]
 fn harness_daemon_answers_component_supervision_relation() {
     use nota_codec::{Encoder, NotaEncode};
-    use signal_harness::{
-        HarnessDaemonConfiguration, HarnessKind as ContractHarnessKind, HarnessName,
-    };
+    use signal_harness::{HarnessDaemonConfiguration, HarnessKind as ContractHarnessKind};
     use signal_persona::{SocketMode as WireSocketMode, WirePath};
     use signal_persona_origin::{OwnerIdentity, UnixUserIdentifier};
 
@@ -619,11 +698,11 @@ fn harness_daemon_answers_component_supervision_relation() {
         harness_socket_mode: WireSocketMode::new(0o600),
         supervision_socket_path: WirePath::new(supervision_socket.display().to_string()),
         supervision_socket_mode: WireSocketMode::new(0o600),
-        harness_name: HarnessName::new("operator"),
-        harness_kind: ContractHarnessKind::Fixture,
-        terminal_socket_path: None,
         owner_identity: OwnerIdentity::UnixUser(UnixUserIdentifier::new(1000)),
-        pi_rpc_adapter: None,
+        harnesses: vec![configured_instance(
+            "operator",
+            ContractHarnessKind::Fixture,
+        )],
     };
     let mut encoder = Encoder::new();
     configuration

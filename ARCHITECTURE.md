@@ -17,12 +17,13 @@ writes the generated `TerminalFrame` directly; it does not depend on the
 retired in-process `persona-terminal` helper crate.
 
 The Pi-facing intake contract is Pi RPC/JSONL over stdio. A Pi-kind
-harness may be launched with a typed `PiRpcJsonlAdapterConfiguration`
-in `HarnessDaemonConfiguration`; the daemon then owns a long-lived
-`pi --mode rpc` process and converts routed `MessageDelivery` records
-into the configured `prompt`, `steer`, or `follow_up` JSONL command.
-Delivery completes only when Pi emits the matching successful JSONL
-response.
+harness instance may be launched with a typed
+`PiRpcJsonlAdapterConfiguration` in its
+`HarnessInstanceConfiguration`; the daemon then owns a long-lived
+`pi --mode rpc` process for that instance and converts routed
+`MessageDelivery` records into the configured `prompt`, `steer`, or
+`follow_up` JSONL command. Delivery completes only when Pi emits the
+matching successful JSONL response.
 
 Transcript and worker-lifecycle observations are pushed as typed events
 over the harness observation channel defined by `signal-harness`.
@@ -81,14 +82,18 @@ canonical `SupervisionPhase` Kameo actor. The daemon receives exactly one
 startup argument: a `signal_harness::HarnessDaemonConfiguration`
 record supplied as inline NOTA, a `.nota` path, or a signal-encoded `.rkyv`
 path. That record carries the harness socket path and mode, supervision socket
-path and mode, harness name, `HarnessKind`, optional terminal socket, and owner
-identity. For Pi harnesses it may also carry the optional
+path and mode, owner identity, and a list of typed
+`HarnessInstanceConfiguration` records. Each instance record carries the
+harness name, `HarnessKind`, optional terminal socket, and optional
 `PiRpcJsonlAdapterConfiguration` that starts the programmatic Pi intake
-process.
+process for that harness.
 
-`HarnessKind` is not argv state. The daemon takes it from
-`HarnessDaemonConfiguration::harness_kind`, preserving the closed enum while
-keeping process startup inside the workspace single-argument rule.
+`HarnessKind` is not argv state. The daemon takes it from each
+`HarnessInstanceConfiguration::harness_kind`, preserving the closed enum
+while keeping process startup inside the workspace single-argument rule.
+One `harness-daemon` process may own multiple harness instances; those
+boundaries are in-process actors/adapters unless a future deployment
+requires process isolation.
 
 **Harness lifecycle FSM** (closed enum):
 
@@ -213,9 +218,10 @@ This repo does not own:
   available.
 - The message-routing e2e witness is a round-trip only when a real first
   `message` CLI call reaches another harness through real `message-daemon`,
-  `router-daemon`, and `harness-daemon` processes, the receiving endpoint sends
-  a reply through its own real `message` CLI and message daemon, and the first
-  harness receives that response.
+  `router-daemon`, and one `harness-daemon` process owning both harness
+  instances, the receiving endpoint sends a reply through its own real
+  `message` CLI and message daemon, and the first harness receives that
+  response.
 - The daemon answers `HarnessStatusQuery` with typed health and readiness.
 - The daemon returns `HarnessRequestUnimplemented` for valid contract
   operations that are not built yet.
@@ -264,6 +270,7 @@ tests/            harness smoke and actor-runtime constraint tests
 | Harness daemon applies the managed spawn-envelope socket mode. | `nix flake check .#harness-daemon-applies-spawn-envelope-socket-mode` |
 | Harness daemon flows distinctive socket modes through to both the domain and supervision sockets. | `nix flake check .#harness-daemon-applies-distinctive-spawn-envelope-socket-modes` |
 | Harness daemon delivers message bytes to a configured terminal endpoint. | `nix flake check .#harness-daemon-delivers-message-to-terminal-endpoint` |
+| Harness daemon dispatches two harness instances inside one process by `HarnessName`. | `cargo test --test daemon harness_daemon_dispatches_two_harness_instances_inside_one_process` |
 | Harness daemon delivers Pi-kind messages through the Pi RPC/JSONL adapter. | `cargo test --test daemon harness_daemon_delivers_message_to_pi_rpc_endpoint` |
 | The Pi RPC adapter can accept a prompt through the low-quant Gemma 4 MoE local model when the live endpoint is available. | `HARNESS_LIVE_PI_RPC=1 HARNESS_LIVE_PI_MODEL=gemma-4-26b-a4b-ud-q4-k-xl cargo test --test pi_rpc_live -- --nocapture` |
 | Harness daemon rejects message delivery without a terminal endpoint. | `nix flake check .#harness-daemon-rejects-message-delivery-without-terminal-endpoint` |
@@ -272,7 +279,7 @@ tests/            harness smoke and actor-runtime constraint tests
 | Harness daemon opens a transcript subscription, returns a typed snapshot, and pushes typed deltas. | `nix flake check .#harness-daemon-pushes-transcript-deltas-after-subscribe` |
 | A subscriber receives the final `HarnessSubscriptionRetracted` ack carrying the same token before the stream ends. | `nix flake check .#harness-daemon-emits-final-subscription-retracted-ack` |
 | A slow subscriber does not stall transcript-delta delivery to a sibling subscription. | `nix flake check .#harness-daemon-slow-subscriber-does-not-block-siblings` |
-| A real `message` CLI call reaches a second Pi-kind harness through real message/router/harness daemons, the receiving endpoint replies through its own real `message` CLI and daemon, and the first harness receives the response. | `cargo test --test message_router_harness_e2e` |
+| A real `message` CLI call reaches a second Pi-kind harness through real message/router daemons and one multi-instance harness daemon, the receiving endpoint replies through its own real `message` CLI and daemon, and the first harness receives the response. | `cargo test --test message_router_harness_e2e` |
 
 ## See Also
 

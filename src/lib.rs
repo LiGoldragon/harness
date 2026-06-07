@@ -11,7 +11,7 @@ pub mod transcript;
 
 pub use daemon::{
     BoundHarnessDaemon, HarnessConnection, HarnessDaemon, HarnessFrameCodec, HarnessRequestHandler,
-    SocketMode,
+    HarnessRuntimeConfiguration, SocketMode,
 };
 pub use delivery::{HarnessDeliveryAdapter, HarnessDeliveryReceipt};
 pub use error::{Error, Result};

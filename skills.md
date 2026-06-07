@@ -12,6 +12,10 @@ Rules for work here:
 - Use the Pi RPC/JSONL adapter for Pi programmatic intake; do not force Pi
   through terminal injection when the daemon has a typed Pi adapter
   configuration.
+- One `harness-daemon` component process may own multiple harness instances.
+  Add per-harness boundaries as `HarnessInstanceConfiguration` records and
+  in-process actors/adapters; do not spawn one daemon process per harness
+  unless a deployment-isolation requirement is explicit.
 - Model harness capabilities as typed values, not strings.
 - Project harness identity through typed read views. Do not return full binding
   records to every caller, and do not treat the projection enum as an

@@ -11,7 +11,9 @@ use std::{
 use message::{Configuration as MessageConfiguration, command::Output as MessageCommandOutput};
 use nota_codec::{Encoder, NotaEncode};
 use signal_core::{ExchangeIdentifier, NonEmpty, Reply, SignalVerb, SubReply};
-use signal_harness::{HarnessDaemonConfiguration, HarnessKind, HarnessName};
+use signal_harness::{
+    HarnessDaemonConfiguration, HarnessInstanceConfiguration, HarnessKind, HarnessName,
+};
 use signal_persona::{SocketMode as WireSocketMode, WirePath};
 use signal_persona_origin::{OwnerIdentity, UnixUserIdentifier};
 use signal_persona_terminal::{
@@ -28,7 +30,7 @@ const AGENT_A: &str = "agent-a";
 const AGENT_B: &str = "agent-b";
 
 #[test]
-fn message_cli_round_trips_between_two_harness_agents_through_real_daemons() {
+fn message_cli_round_trips_between_two_agents_through_one_harness_daemon() {
     let Some(test) = MessageRouterHarnessE2e::new() else {
         eprintln!(
             "skipping message/router/harness e2e; set MESSAGE_CLI_BINARY, MESSAGE_DAEMON_BINARY, and ROUTER_DAEMON_BINARY or provide sibling repositories"
@@ -36,8 +38,7 @@ fn message_cli_round_trips_between_two_harness_agents_through_real_daemons() {
         return;
     };
 
-    let agent_a_harness = test.spawn_harness_daemon(AGENT_A, test.agent_a_terminal().path());
-    let agent_b_harness = test.spawn_harness_daemon(AGENT_B, test.agent_b_terminal().path());
+    let harness_daemon = test.spawn_harness_daemon();
     let router_daemon = test.spawn_router_daemon();
     let agent_a_message_daemon = test.spawn_message_daemon(AGENT_A);
     let agent_b_message_daemon = test.spawn_message_daemon(AGENT_B);
@@ -83,8 +84,7 @@ fn message_cli_round_trips_between_two_harness_agents_through_real_daemons() {
     drop(agent_b_message_daemon);
     drop(agent_a_message_daemon);
     drop(router_daemon);
-    drop(agent_b_harness);
-    drop(agent_a_harness);
+    drop(harness_daemon);
 }
 
 struct MessageRouterHarnessE2e {
@@ -134,13 +134,12 @@ impl MessageRouterHarnessE2e {
         &self.agent_b_terminal
     }
 
-    fn harness_socket(&self, actor: &str) -> PathBuf {
-        self.root_path().join(format!("{actor}-harness.sock"))
+    fn harness_socket(&self) -> PathBuf {
+        self.root_path().join("harness.sock")
     }
 
-    fn harness_supervision_socket(&self, actor: &str) -> PathBuf {
-        self.root_path()
-            .join(format!("{actor}-harness-supervision.sock"))
+    fn harness_supervision_socket(&self) -> PathBuf {
+        self.root_path().join("harness-supervision.sock")
     }
 
     fn router_socket(&self) -> PathBuf {
@@ -163,20 +162,34 @@ impl MessageRouterHarnessE2e {
         root.join(format!("{actor}-message.sock"))
     }
 
-    fn spawn_harness_daemon(&self, actor: &str, terminal_socket: &Path) -> ManagedProcess {
-        let harness_socket = self.harness_socket(actor);
-        let supervision_socket = self.harness_supervision_socket(actor);
-        let configuration_path = self.root_path().join(format!("{actor}-harness.nota"));
+    fn spawn_harness_daemon(&self) -> ManagedProcess {
+        let harness_socket = self.harness_socket();
+        let supervision_socket = self.harness_supervision_socket();
+        let configuration_path = self.root_path().join("harness.nota");
         let configuration = HarnessDaemonConfiguration {
             harness_socket_path: WirePath::new(harness_socket.display().to_string()),
             harness_socket_mode: WireSocketMode::new(0o600),
             supervision_socket_path: WirePath::new(supervision_socket.display().to_string()),
             supervision_socket_mode: WireSocketMode::new(0o600),
-            harness_name: HarnessName::new(actor),
-            harness_kind: HarnessKind::Pi,
-            terminal_socket_path: Some(WirePath::new(terminal_socket.display().to_string())),
             owner_identity: OwnerIdentity::UnixUser(UnixUserIdentifier::new(self.current_uid())),
-            pi_rpc_adapter: None,
+            harnesses: vec![
+                HarnessInstanceConfiguration {
+                    harness_name: HarnessName::new(AGENT_A),
+                    harness_kind: HarnessKind::Pi,
+                    terminal_socket_path: Some(WirePath::new(
+                        self.agent_a_terminal().path().display().to_string(),
+                    )),
+                    pi_rpc_adapter: None,
+                },
+                HarnessInstanceConfiguration {
+                    harness_name: HarnessName::new(AGENT_B),
+                    harness_kind: HarnessKind::Pi,
+                    terminal_socket_path: Some(WirePath::new(
+                        self.agent_b_terminal().path().display().to_string(),
+                    )),
+                    pi_rpc_adapter: None,
+                },
+            ],
         };
         NotaFile::write(&configuration_path, &configuration);
         let process = ManagedProcess::spawn(
@@ -191,11 +204,7 @@ impl MessageRouterHarnessE2e {
 
     fn spawn_router_daemon(&self) -> ManagedProcess {
         let bootstrap_path = self.root_path().join("router-bootstrap.nota");
-        BootstrapFile::write(
-            &bootstrap_path,
-            &self.harness_socket(AGENT_A),
-            &self.harness_socket(AGENT_B),
-        );
+        BootstrapFile::write(&bootstrap_path, &self.harness_socket());
         let configuration_path = self.root_path().join("router.nota");
         let router_socket = self.router_socket();
         let meta_socket = self.router_meta_socket();
@@ -247,14 +256,14 @@ impl MessageRouterHarnessE2e {
 struct BootstrapFile;
 
 impl BootstrapFile {
-    fn write(path: &Path, agent_a_harness_socket: &Path, agent_b_harness_socket: &Path) {
+    fn write(path: &Path, harness_socket: &Path) {
         let document = RouterBootstrapDocument::new(vec![
             RouterBootstrapOperation::RegisterActor(RegisterActor::new(Actor::new(
                 ActorIdentifier::new(AGENT_A),
                 std::process::id(),
                 Some(EndpointTransport::new(
                     EndpointKind::HarnessSocket,
-                    agent_a_harness_socket.display().to_string(),
+                    harness_socket.display().to_string(),
                     None,
                 )),
             ))),
@@ -263,7 +272,7 @@ impl BootstrapFile {
                 std::process::id(),
                 Some(EndpointTransport::new(
                     EndpointKind::HarnessSocket,
-                    agent_b_harness_socket.display().to_string(),
+                    harness_socket.display().to_string(),
                     None,
                 )),
             ))),

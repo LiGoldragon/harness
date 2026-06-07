@@ -724,7 +724,7 @@ dependencies = [
 [[package]]
 name = "signal-harness"
 version = "0.1.0"
-source = "git+https://github.com/LiGoldragon/signal-harness.git?branch=main#0b456501947f8881097da72fa661c09f3a2f56e2"
+source = "git+https://github.com/LiGoldragon/signal-harness.git?branch=main#0cf61f9ac324541a7b421f0327cd5d8ecd702727"
 dependencies = [
  "nota-codec",
  "nota-config",
