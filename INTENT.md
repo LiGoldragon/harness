@@ -11,13 +11,14 @@ realization step on the eventually-self-hosting stack.
 an explicit `Fixture` variant for test harnesses. Later production harnesses become
 explicit schema variants, never `Other { name }` string payloads. `HarnessKind` is not
 argv state: the daemon takes it from a typed `HarnessInstanceConfiguration` inside the
-single `HarnessDaemonConfiguration` startup record (inline NOTA, `.nota` path, or
-signal-encoded `.rkyv` path), preserving the closed enum while keeping startup inside
-the single-argument rule. One `harness-daemon` component process may own multiple
-harness instances internally; per-harness boundaries are actors/adapters, not separate
-daemon processes. The daemon answers supervision through a canonical `SupervisionPhase`
-actor, binds `harness.sock` at the managed spawn-envelope socket mode before accepting
-traffic, and replies
+single signal-encoded/rkyv `HarnessDaemonConfiguration` startup record, preserving the
+closed enum while keeping startup inside the one-argument daemon rule. The daemon does
+not decode inline NOTA or `.nota` configuration; authored NOTA belongs to deploy/test
+tools that encode the binary startup record before process launch. One `harness-daemon`
+component process may own multiple harness instances internally; per-harness boundaries
+are actors/adapters, not separate daemon processes. The daemon answers supervision
+through a canonical `SupervisionPhase` actor, binds `harness.sock` at the managed
+spawn-envelope socket mode before accepting traffic, and replies
 `HarnessRequestUnimplemented` for valid contract operations not yet built — never a panic
 or untyped text.
 

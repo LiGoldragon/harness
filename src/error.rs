@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -19,8 +21,26 @@ pub enum Error {
         reason: signal_core::RequestRejectionReason,
     },
 
-    #[error("nota-config: {0}")]
-    NotaConfig(#[from] nota_config::Error),
+    #[error("daemon argument: {0}")]
+    Argument(#[from] triad_runtime::ArgumentError),
+
+    #[error("failed to read binary daemon configuration {path}: {source}")]
+    ConfigurationRead {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+
+    #[error("failed to write binary daemon configuration {path}: {source}")]
+    ConfigurationWrite {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+
+    #[error("failed to encode binary daemon configuration")]
+    ConfigurationArchiveEncode,
+
+    #[error("failed to decode binary daemon configuration")]
+    ConfigurationArchiveDecode,
 
     #[error("json: {0}")]
     Json(#[from] serde_json::Error),

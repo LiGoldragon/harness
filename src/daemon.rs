@@ -30,9 +30,9 @@ pub struct HarnessDaemon {
 }
 
 impl HarnessDaemon {
-    /// Canonical constructor — every production launch reads typed
-    /// `HarnessDaemonConfiguration` from argv via `nota-config` and
-    /// hands the record here.
+    /// Canonical constructor — every production launch reads a typed
+    /// `HarnessDaemonConfiguration` from the daemon's binary rkyv startup file
+    /// and hands the decoded record here.
     pub fn from_configuration(configuration: HarnessDaemonConfiguration) -> Self {
         let supervision = SupervisionListener::new(
             SupervisionProfile::harness(),

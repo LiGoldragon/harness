@@ -80,9 +80,10 @@ stream.
 The harness daemon answers `signal-persona::SupervisionRequest` from a
 canonical `SupervisionPhase` Kameo actor. The daemon receives exactly one
 startup argument: a `signal_harness::HarnessDaemonConfiguration`
-record supplied as inline NOTA, a `.nota` path, or a signal-encoded `.rkyv`
-path. That record carries the harness socket path and mode, supervision socket
-path and mode, owner identity, and a list of typed
+record supplied as a signal-encoded/rkyv file path. Inline NOTA and `.nota`
+startup files are rejected before daemon-specific decoding. That record carries
+the harness socket path and mode, supervision socket path and mode, owner
+identity, and a list of typed
 `HarnessInstanceConfiguration` records. Each instance record carries the
 harness name, `HarnessKind`, optional terminal socket, and optional
 `PiRpcJsonlAdapterConfiguration` that starts the programmatic Pi intake
@@ -264,8 +265,9 @@ tests/            harness smoke and actor-runtime constraint tests
 | Fixture-only human terminal endpoints cannot claim production delivery. | `nix flake check .#terminal-fixture-endpoint-not-production-delivery` |
 | `HarnessKind` has exactly four variants and no fifth. | `nix flake check .#harness-kind-includes-all-four-variants` |
 | `HarnessKind` has no command-line argument projection table. | `nix flake check .#harness-kind-has-no-command-line-argument-projection` |
-| Harness daemon accepts `HarnessKind::Fixture` from a single NOTA configuration argument. | `nix flake check .#harness-daemon-accepts-fixture-kind-from-single-nota-configuration-argument` |
-| Harness daemon accepts `HarnessKind::Codex` from a single NOTA configuration argument. | `nix flake check .#harness-daemon-accepts-codex-kind-from-single-nota-configuration-argument` |
+| Harness daemon accepts `HarnessKind::Fixture` from a single binary configuration argument. | `cargo test --test daemon harness_daemon_accepts_fixture_kind_from_single_binary_configuration_argument` |
+| Harness daemon accepts `HarnessKind::Codex` from a single binary configuration argument. | `cargo test --test daemon harness_daemon_accepts_codex_kind_from_single_binary_configuration_argument` |
+| Harness daemon rejects inline NOTA and `.nota` configuration arguments. | `cargo test --test daemon harness_daemon_configuration_rejects` |
 | Harness daemon rejects multiple configuration arguments before daemon construction. | `nix flake check .#harness-daemon-configuration-rejects-multiple-arguments` |
 | Harness daemon applies the managed spawn-envelope socket mode. | `nix flake check .#harness-daemon-applies-spawn-envelope-socket-mode` |
 | Harness daemon flows distinctive socket modes through to both the domain and supervision sockets. | `nix flake check .#harness-daemon-applies-distinctive-spawn-envelope-socket-modes` |

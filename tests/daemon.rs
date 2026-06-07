@@ -8,10 +8,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use harness::{
-    HarnessDaemon, HarnessFrameCodec, HarnessKind, HarnessRuntimeConfiguration,
-    PiRpcDeliveryCommand, PiRpcProcessConfiguration, SocketMode, SupervisionFrameCodec,
+    HarnessDaemon, HarnessDaemonCommand, HarnessDaemonConfigurationFile, HarnessFrameCodec,
+    HarnessKind, HarnessRuntimeConfiguration, PiRpcDeliveryCommand, PiRpcProcessConfiguration,
+    SocketMode, SupervisionFrameCodec,
 };
-use nota_config::ConfigurationSource;
 use signal_core::{
     ExchangeIdentifier, ExchangeLane, LaneSequence, NonEmpty, Operation, Reply, Request,
     RequestRejectionReason, SessionEpoch, SignalVerb, SubReply,
@@ -287,33 +287,66 @@ fn harness_daemon_applies_spawn_envelope_socket_mode() {
 }
 
 #[test]
-fn harness_daemon_accepts_fixture_kind_from_single_nota_configuration_argument() {
+fn harness_daemon_accepts_fixture_kind_from_single_binary_configuration_argument() {
     let daemon =
-        daemon_from_single_nota_configuration_argument(signal_harness::HarnessKind::Fixture);
+        daemon_from_single_binary_configuration_argument(signal_harness::HarnessKind::Fixture);
 
     assert_eq!(daemon.kind(), &HarnessKind::Fixture);
 }
 
 #[test]
-fn harness_daemon_accepts_codex_kind_from_single_nota_configuration_argument() {
-    let daemon = daemon_from_single_nota_configuration_argument(signal_harness::HarnessKind::Codex);
+fn harness_daemon_accepts_codex_kind_from_single_binary_configuration_argument() {
+    let daemon =
+        daemon_from_single_binary_configuration_argument(signal_harness::HarnessKind::Codex);
 
     assert_eq!(daemon.kind(), &HarnessKind::Codex);
 }
 
 #[test]
 fn harness_daemon_configuration_rejects_multiple_arguments() {
-    let error = ConfigurationSource::from_args(["(HarnessDaemonConfiguration)", "extra"])
+    let error = HarnessDaemonCommand::from_arguments(["configuration.rkyv", "extra"])
+        .configuration()
         .expect_err("multiple arguments are rejected before daemon construction");
 
-    assert!(matches!(error, nota_config::Error::MultipleArguments(2)));
+    assert!(matches!(
+        error,
+        harness::Error::Argument(triad_runtime::ArgumentError::ArgumentCount { count: 2 })
+    ));
 }
 
-fn daemon_from_single_nota_configuration_argument(
+#[test]
+fn harness_daemon_configuration_rejects_inline_nota_argument() {
+    let error = HarnessDaemonCommand::from_arguments(["(HarnessDaemonConfiguration)"])
+        .configuration()
+        .expect_err("daemon rejects inline NOTA");
+
+    assert!(matches!(
+        error,
+        harness::Error::Argument(triad_runtime::ArgumentError::ExpectedSignalFile)
+    ));
+}
+
+#[test]
+fn harness_daemon_configuration_rejects_nota_file_argument() {
+    let fixture = SocketFixture::new("reject-nota-config");
+    let configuration_path = fixture.root.join("harness-daemon.nota");
+    std::fs::write(&configuration_path, "(HarnessDaemonConfiguration)").expect("write NOTA file");
+
+    let error = HarnessDaemonCommand::from_arguments([configuration_path.display().to_string()])
+        .configuration()
+        .expect_err("daemon rejects NOTA files");
+
+    assert!(matches!(
+        error,
+        harness::Error::Argument(triad_runtime::ArgumentError::ExpectedSignalFile)
+    ));
+}
+
+fn daemon_from_single_binary_configuration_argument(
     harness_kind: signal_harness::HarnessKind,
 ) -> HarnessDaemon {
-    use nota_codec::{Encoder, NotaEncode};
-
+    let fixture = SocketFixture::new("binary-configuration");
+    let configuration_path = fixture.root.join("harness-daemon.rkyv");
     let configuration = HarnessDaemonConfiguration {
         harness_socket_path: WirePath::new("/tmp/harness.sock"),
         harness_socket_mode: WireSocketMode::new(0o600),
@@ -322,15 +355,12 @@ fn daemon_from_single_nota_configuration_argument(
         owner_identity: OwnerIdentity::UnixUser(UnixUserIdentifier::new(1000)),
         harnesses: vec![configured_instance("operator", harness_kind)],
     };
-    let mut encoder = Encoder::new();
-    configuration
-        .encode(&mut encoder)
-        .expect("configuration encodes");
-    let text = encoder.into_string();
-    let decoded: HarnessDaemonConfiguration = ConfigurationSource::from_args([text.as_str()])
-        .expect("single inline NOTA argument is accepted")
-        .decode()
-        .expect("configuration decodes");
+    HarnessDaemonConfigurationFile::new(configuration_path.clone())
+        .write_configuration(&configuration)
+        .expect("write binary configuration");
+    let decoded = HarnessDaemonCommand::from_arguments([configuration_path.display().to_string()])
+        .configuration()
+        .expect("binary configuration decodes");
 
     HarnessDaemon::from_configuration(decoded)
 }
@@ -625,14 +655,13 @@ fn harness_daemon_answers_status_readiness() {
 /// the constraint-test table) for the supervision socket specifically.
 #[test]
 fn harness_daemon_applies_distinctive_spawn_envelope_socket_modes() {
-    use nota_codec::{Encoder, NotaEncode};
     use signal_harness::{HarnessDaemonConfiguration, HarnessKind as ContractHarnessKind};
     use signal_persona::{SocketMode as WireSocketMode, WirePath};
     use signal_persona_origin::{OwnerIdentity, UnixUserIdentifier};
 
     let fixture = SocketFixture::new("distinctive-socket-modes");
     let supervision_socket = fixture.supervision_socket();
-    let configuration_path = fixture.root.join("harness-daemon.nota");
+    let configuration_path = fixture.root.join("harness-daemon.rkyv");
     let configuration = HarnessDaemonConfiguration {
         harness_socket_path: WirePath::new(fixture.socket().display().to_string()),
         harness_socket_mode: WireSocketMode::new(0o640),
@@ -644,13 +673,9 @@ fn harness_daemon_applies_distinctive_spawn_envelope_socket_modes() {
             ContractHarnessKind::Fixture,
         )],
     };
-    let mut encoder = Encoder::new();
-    configuration
-        .encode(&mut encoder)
-        .expect("encode harness config");
-    let mut text = encoder.into_string();
-    text.push('\n');
-    std::fs::write(&configuration_path, text).expect("write harness config");
+    HarnessDaemonConfigurationFile::new(configuration_path.clone())
+        .write_configuration(&configuration)
+        .expect("write binary harness config");
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_harness-daemon"))
         .arg(&configuration_path)
@@ -685,14 +710,13 @@ fn harness_daemon_applies_distinctive_spawn_envelope_socket_modes() {
 
 #[test]
 fn harness_daemon_answers_component_supervision_relation() {
-    use nota_codec::{Encoder, NotaEncode};
     use signal_harness::{HarnessDaemonConfiguration, HarnessKind as ContractHarnessKind};
     use signal_persona::{SocketMode as WireSocketMode, WirePath};
     use signal_persona_origin::{OwnerIdentity, UnixUserIdentifier};
 
     let fixture = SocketFixture::new("component-supervision");
     let supervision_socket = fixture.supervision_socket();
-    let configuration_path = fixture.root.join("harness-daemon.nota");
+    let configuration_path = fixture.root.join("harness-daemon.rkyv");
     let configuration = HarnessDaemonConfiguration {
         harness_socket_path: WirePath::new(fixture.socket().display().to_string()),
         harness_socket_mode: WireSocketMode::new(0o600),
@@ -704,13 +728,9 @@ fn harness_daemon_answers_component_supervision_relation() {
             ContractHarnessKind::Fixture,
         )],
     };
-    let mut encoder = Encoder::new();
-    configuration
-        .encode(&mut encoder)
-        .expect("encode harness config");
-    let mut text = encoder.into_string();
-    text.push('\n');
-    std::fs::write(&configuration_path, text).expect("write harness config");
+    HarnessDaemonConfigurationFile::new(configuration_path.clone())
+        .write_configuration(&configuration)
+        .expect("write binary harness config");
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_harness-daemon"))
         .arg(&configuration_path)

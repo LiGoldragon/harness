@@ -8,6 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use harness::HarnessDaemonConfigurationFile;
 use message::{Configuration as MessageConfiguration, command::Output as MessageCommandOutput};
 use nota_codec::{Encoder, NotaEncode};
 use signal_core::{ExchangeIdentifier, NonEmpty, Reply, SignalVerb, SubReply};
@@ -165,7 +166,7 @@ impl MessageRouterHarnessE2e {
     fn spawn_harness_daemon(&self) -> ManagedProcess {
         let harness_socket = self.harness_socket();
         let supervision_socket = self.harness_supervision_socket();
-        let configuration_path = self.root_path().join("harness.nota");
+        let configuration_path = self.root_path().join("harness.rkyv");
         let configuration = HarnessDaemonConfiguration {
             harness_socket_path: WirePath::new(harness_socket.display().to_string()),
             harness_socket_mode: WireSocketMode::new(0o600),
@@ -191,7 +192,9 @@ impl MessageRouterHarnessE2e {
                 },
             ],
         };
-        NotaFile::write(&configuration_path, &configuration);
+        HarnessDaemonConfigurationFile::new(configuration_path.clone())
+            .write_configuration(&configuration)
+            .expect("write binary harness configuration");
         let process = ManagedProcess::spawn(
             "harness-daemon",
             env!("CARGO_BIN_EXE_harness-daemon"),

@@ -1,3 +1,4 @@
+pub mod command;
 pub mod daemon;
 pub mod delivery;
 pub mod error;
@@ -9,6 +10,7 @@ pub mod supervision;
 pub mod terminal;
 pub mod transcript;
 
+pub use command::{HarnessDaemonCommand, HarnessDaemonConfigurationFile};
 pub use daemon::{
     BoundHarnessDaemon, HarnessConnection, HarnessDaemon, HarnessFrameCodec, HarnessRequestHandler,
     HarnessRuntimeConfiguration, SocketMode,
