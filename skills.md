@@ -8,7 +8,7 @@ Rules for work here:
 
 - Keep routing policy in `persona-router`.
 - Keep OS/window-manager observations in `persona-system`.
-- Keep durable PTY and viewer transport in `persona-terminal`.
+- Keep durable PTY and viewer transport in `terminal`.
 - Use the Pi RPC/JSONL adapter for Pi programmatic intake; do not force Pi
   through terminal injection when the daemon has a typed Pi adapter
   configuration.
@@ -33,7 +33,7 @@ Rules for work here:
   fan out through a shared `Arc<Mutex<Vec<_>>>`.
 - The handler's outbound delta buffer is bounded; on overrun the
   subscription drops with a typed failure reply.
-- The kernel grammar at `signal-core/macros/src/validate.rs:303–331`
+- The kernel grammar at `signal-frame/macros/src/validate.rs`
   enforces close-is-Retract: the daemon must accept
   `HarnessTranscriptRetraction` and emit the final
   `HarnessSubscriptionRetracted` reply before closing the stream.

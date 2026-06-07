@@ -12,12 +12,9 @@ use harness::{
     HarnessKind, HarnessRuntimeConfiguration, PiRpcDeliveryCommand, PiRpcProcessConfiguration,
     SocketMode, SupervisionFrameCodec,
 };
-use signal_core::{
-    ExchangeIdentifier as CoreExchangeIdentifier, NonEmpty as CoreNonEmpty, Reply as CoreReply,
-    SignalVerb, SubReply as CoreSubReply,
-};
 use signal_frame::{
-    ExchangeIdentifier, ExchangeLane, LaneSequence, Reply, Request, SessionEpoch, SubReply,
+    ExchangeIdentifier, ExchangeLane, LaneSequence, NonEmpty, Reply, Request, SessionEpoch,
+    SubReply,
 };
 use signal_harness::{
     DeliveryCompleted, DeliveryFailed, DeliveryFailureReason, HarnessDaemonConfiguration,
@@ -35,7 +32,7 @@ use signal_persona::{
     SocketMode as WireSocketMode, WirePath,
 };
 use signal_persona_origin::{OwnerIdentity, UnixUserIdentifier};
-use signal_persona_terminal::{
+use signal_terminal::{
     TerminalFrame, TerminalFrameBody, TerminalGeneration, TerminalInputAccepted, TerminalReply,
     TerminalRequest,
 };
@@ -101,7 +98,6 @@ impl TerminalAcceptanceSocket {
                         .write_reply(
                             &mut stream,
                             received_request.exchange,
-                            received_request.verb,
                             TerminalReply::TerminalInputAccepted(TerminalInputAccepted {
                                 terminal: input.terminal,
                                 generation: TerminalGeneration::new(1),
@@ -160,15 +156,16 @@ impl TerminalFixtureFrameCodec {
     fn read_request(&self, stream: &mut UnixStream) -> harness::Result<ReceivedTerminalRequest> {
         match self.read_frame(stream)?.into_body() {
             TerminalFrameBody::Request { exchange, request } => {
-                let checked = request
-                    .into_checked()
-                    .map_err(|(reason, _)| harness::Error::InvalidSignalRequest { reason })?;
-                let operation = checked.operations.into_head();
-                Ok(ReceivedTerminalRequest {
-                    exchange,
-                    verb: operation.verb,
-                    request: operation.payload,
-                })
+                let (request, tail) = request.payloads.into_head_and_tail();
+                if !tail.is_empty() {
+                    return Err(harness::Error::UnexpectedSignalFrame {
+                        got: format!(
+                            "expected one terminal request payload, got {}",
+                            tail.len() + 1
+                        ),
+                    });
+                }
+                Ok(ReceivedTerminalRequest { exchange, request })
             }
             other => Err(harness::Error::UnexpectedSignalFrame {
                 got: format!("{other:?}"),
@@ -179,16 +176,12 @@ impl TerminalFixtureFrameCodec {
     fn write_reply(
         &self,
         stream: &mut UnixStream,
-        exchange: CoreExchangeIdentifier,
-        verb: SignalVerb,
+        exchange: ExchangeIdentifier,
         reply: TerminalReply,
     ) -> harness::Result<()> {
         let frame = TerminalFrame::new(TerminalFrameBody::Reply {
             exchange,
-            reply: CoreReply::completed(CoreNonEmpty::single(CoreSubReply::Ok {
-                verb,
-                payload: reply,
-            })),
+            reply: Reply::committed(NonEmpty::single(SubReply::Ok(reply))),
         });
         let bytes = frame.encode_length_prefixed()?;
         stream.write_all(&bytes)?;
@@ -207,8 +200,7 @@ impl Default for TerminalFixtureFrameCodec {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ReceivedTerminalRequest {
-    exchange: CoreExchangeIdentifier,
-    verb: SignalVerb,
+    exchange: ExchangeIdentifier,
     request: TerminalRequest,
 }
 

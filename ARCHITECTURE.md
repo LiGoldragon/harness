@@ -9,12 +9,12 @@ test harnesses. Later production harnesses become explicit variants, not
 `Other { name }` string payloads. Harnesses carry lifecycle state, typed
 transcript observations, sequence pointers, and delivery capabilities.
 
-The Persona-facing terminal contract is `signal-persona-terminal`. The
+The Persona-facing terminal contract is `signal-terminal`. The
 destination shape for harness → terminal delivery is a typed
-`signal-persona-terminal` request/reply exchanged as a length-prefixed
+`signal-terminal` request/reply exchanged as a length-prefixed
 Signal frame on the terminal supervisor socket. The harness runtime
 writes the generated `TerminalFrame` directly; it does not depend on the
-retired in-process `persona-terminal` helper crate.
+retired in-process `terminal` helper crate.
 
 The Pi-facing intake contract is Pi RPC/JSONL over stdio. A Pi-kind
 harness instance may be launched with a typed
@@ -46,7 +46,7 @@ OS-specific focus observation, or terminal durable PTY transport.
 flowchart LR
     "persona-router" -->|"delivery request"| "Harness"
     "Harness" -->|"adapter command"| "HarnessAdapter"
-    "HarnessAdapter" -->|"TerminalFrame"| "signal-persona-terminal"
+    "HarnessAdapter" -->|"TerminalFrame"| "signal-terminal"
     "HarnessAdapter" -->|"Pi RPC JSONL"| "pi --mode rpc"
     "Harness" -->|"typed observation + sequence pointer"| "persona-router"
     "Harness" -->|"harness-owned state"| "harness Sema"
@@ -69,7 +69,7 @@ flowchart LR
 
 The only endpoint that may complete without sending bytes to terminal
 transport is `FixtureOnlyHuman`. It is a fixture endpoint, not production
-delivery. Production terminal delivery uses the `signal-persona-terminal`
+delivery. Production terminal delivery uses the `signal-terminal`
 contract and counts an input as delivered only after
 `TerminalReply::TerminalInputAccepted`. Pi RPC delivery counts as delivered
 only after the configured RPC command is accepted by the Pi JSONL response
@@ -166,7 +166,7 @@ closed enum. Runtime permission lives in filesystem ACLs plus router
 channel state choreographed by mind.
 
 When durable harness history is needed, the harness actor opens its **own**
-redb file (e.g. `harness.redb`) through a harness-owned Sema layer over the
+harness Sema file (e.g. `harness.sema`) through a harness-owned Sema layer over the
 workspace's `sema` database library. The harness actor sequences its own
 writes; no shared cross-component database.
 
@@ -186,9 +186,9 @@ This repo does not own:
 
 - routing decisions (`persona-router`);
 - OS/window focus backend (`persona-system`);
-- PTY byte transport (`persona-terminal`);
+- PTY byte transport (`terminal`);
 - harness wire contract definitions (`signal-harness`);
-- terminal wire contract definitions (`signal-persona-terminal`);
+- terminal wire contract definitions (`signal-terminal`);
 - the top-level engine-manager contract (`signal-persona`);
 - Pi's internal model/runtime implementation;
 - database write ownership for other components' Sema layers.
@@ -290,6 +290,6 @@ tests/            harness smoke and actor-runtime constraint tests
 
 - `../persona-router/ARCHITECTURE.md`
 - `../persona-system/ARCHITECTURE.md`
-- `../persona-terminal/ARCHITECTURE.md`
+- `../terminal/ARCHITECTURE.md`
 - `../sema/ARCHITECTURE.md`
 - `../signal-harness/ARCHITECTURE.md`

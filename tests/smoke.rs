@@ -3,7 +3,7 @@ use harness::{
     HarnessTerminalDelivery, HarnessTerminalEndpoint, TerminalDeliveryPath, TranscriptEvent,
     TranscriptLine,
 };
-use signal_persona_terminal::{TerminalInput, TerminalInputBytes, TerminalRequest};
+use signal_terminal::{TerminalInput, TerminalInputBytes, TerminalRequest};
 
 #[test]
 fn harness_binding_keeps_identity() {

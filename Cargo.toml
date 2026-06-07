@@ -19,12 +19,11 @@ path = "src/main.rs"
 [dependencies]
 kameo                   = { version = "0.20", default-features = false, features = ["macros", "tracing"] }
 rkyv                    = { version = "0.8", default-features = false, features = ["std", "bytecheck", "little_endian", "pointer_width_32", "unaligned"] }
-signal-core            = { git = "https://github.com/LiGoldragon/signal-core.git" }
 signal-frame           = { git = "https://github.com/LiGoldragon/signal-frame.git", branch = "main" }
 signal-persona         = { git = "https://github.com/LiGoldragon/signal-persona.git" }
 signal-persona-origin     = { git = "https://github.com/LiGoldragon/signal-persona-origin.git" }
 signal-harness = { git = "https://github.com/LiGoldragon/signal-harness.git", branch = "main" }
-signal-persona-terminal = { git = "https://github.com/LiGoldragon/signal-persona-terminal.git", branch = "main" }
+signal-terminal = { git = "https://github.com/LiGoldragon/signal-terminal.git", branch = "main" }
 serde_json              = "1"
 thiserror               = "2"
 tokio                   = { version = "1", features = ["rt-multi-thread", "macros"] }

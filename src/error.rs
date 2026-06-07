@@ -8,10 +8,7 @@ pub enum Error {
     Io(#[from] std::io::Error),
 
     #[error("signal frame: {0}")]
-    SignalFrame(#[from] signal_core::FrameError),
-
-    #[error("harness signal frame: {0}")]
-    HarnessSignalFrame(#[from] signal_frame::FrameError),
+    SignalFrame(#[from] signal_frame::FrameError),
 
     #[error("actor call: {0}")]
     ActorCall(String),
@@ -21,7 +18,7 @@ pub enum Error {
 
     #[error("signal request failed structural checks: {reason}")]
     InvalidSignalRequest {
-        reason: signal_core::RequestRejectionReason,
+        reason: signal_frame::RequestRejectionReason,
     },
 
     #[error("daemon argument: {0}")]

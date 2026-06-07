@@ -50,6 +50,6 @@ witness must exercise a real request and reply path through real `message-daemon
 `router-daemon`, and one `harness-daemon` process that owns both harness instances
 before it can be described as a round-trip daemon witness; a single routed delivery into
 an acceptance socket is only a one-way routing witness. When
-durable harness history is needed, the harness actor opens its own `harness.redb` through
+durable harness history is needed, the harness actor opens its own `harness.sema` through
 a harness-owned Sema layer and sequences its own writes — no shared cross-component
 database, and no write ownership over any other component's Sema layer.

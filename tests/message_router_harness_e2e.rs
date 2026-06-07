@@ -10,19 +10,19 @@ use std::{
 
 use harness::HarnessDaemonConfigurationFile;
 use message::{Configuration as MessageConfiguration, command::Output as MessageCommandOutput};
-use signal_core::{ExchangeIdentifier, NonEmpty, Reply, SignalVerb, SubReply};
+use signal_frame::{ExchangeIdentifier, NonEmpty, Reply, SubReply};
 use signal_harness::{
     HarnessDaemonConfiguration, HarnessInstanceConfiguration, HarnessKind, HarnessName,
 };
 use signal_persona::{SocketMode as WireSocketMode, WirePath};
 use signal_persona_origin::{OwnerIdentity, UnixUserIdentifier};
-use signal_persona_terminal::{
-    TerminalFrame, TerminalFrameBody, TerminalGeneration, TerminalInputAccepted, TerminalReply,
-    TerminalRequest,
-};
 use signal_router::{
     Actor, ActorIdentifier, EndpointKind, EndpointTransport, GrantDirectMessage, RegisterActor,
     RouterBootstrapDocument, RouterBootstrapOperation, RouterDaemonConfiguration,
+};
+use signal_terminal::{
+    TerminalFrame, TerminalFrameBody, TerminalGeneration, TerminalInputAccepted, TerminalReply,
+    TerminalRequest,
 };
 use tempfile::TempDir;
 
@@ -450,15 +450,16 @@ impl TerminalFixtureFrameCodec {
     ) -> harness::Result<ReceivedTerminalRequest> {
         match self.read_frame(stream)?.into_body() {
             TerminalFrameBody::Request { exchange, request } => {
-                let checked = request
-                    .into_checked()
-                    .map_err(|(reason, _)| harness::Error::InvalidSignalRequest { reason })?;
-                let operation = checked.operations.into_head();
-                Ok(ReceivedTerminalRequest {
-                    exchange,
-                    verb: operation.verb,
-                    request: operation.payload,
-                })
+                let (request, tail) = request.payloads.into_head_and_tail();
+                if !tail.is_empty() {
+                    return Err(harness::Error::UnexpectedSignalFrame {
+                        got: format!(
+                            "expected one terminal request payload, got {}",
+                            tail.len() + 1
+                        ),
+                    });
+                }
+                Ok(ReceivedTerminalRequest { exchange, request })
             }
             other => Err(harness::Error::UnexpectedSignalFrame {
                 got: format!("{other:?}"),
@@ -470,15 +471,11 @@ impl TerminalFixtureFrameCodec {
         &self,
         stream: &mut std::os::unix::net::UnixStream,
         exchange: ExchangeIdentifier,
-        verb: SignalVerb,
         reply: TerminalReply,
     ) -> harness::Result<()> {
         let frame = TerminalFrame::new(TerminalFrameBody::Reply {
             exchange,
-            reply: Reply::completed(NonEmpty::single(SubReply::Ok {
-                verb,
-                payload: reply,
-            })),
+            reply: Reply::committed(NonEmpty::single(SubReply::Ok(reply))),
         });
         let bytes = frame.encode_length_prefixed()?;
         stream.write_all(&bytes)?;
@@ -498,7 +495,6 @@ impl Default for TerminalFixtureFrameCodec {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ReceivedTerminalRequest {
     exchange: ExchangeIdentifier,
-    verb: SignalVerb,
     request: TerminalRequest,
 }
 
@@ -531,7 +527,6 @@ impl RecordingTerminalSocket {
                         .write_reply(
                             &mut stream,
                             received_request.exchange,
-                            received_request.verb,
                             TerminalReply::TerminalInputAccepted(TerminalInputAccepted {
                                 terminal: input.terminal,
                                 generation: TerminalGeneration::new(1),
@@ -596,7 +591,6 @@ impl ReplyingTerminalSocket {
                         .write_reply(
                             &mut stream,
                             received_request.exchange,
-                            received_request.verb,
                             TerminalReply::TerminalInputAccepted(TerminalInputAccepted {
                                 terminal: input.terminal,
                                 generation: TerminalGeneration::new(1),

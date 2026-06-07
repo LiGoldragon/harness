@@ -2,11 +2,10 @@ use std::io::{BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 
-use signal_core::{
-    ExchangeIdentifier, ExchangeLane, LaneSequence, Reply, Request, SessionEpoch, SignalVerb,
-    SubReply,
+use signal_frame::{
+    ExchangeIdentifier, ExchangeLane, LaneSequence, Reply, Request, SessionEpoch, SubReply,
 };
-use signal_persona_terminal::{
+use signal_terminal::{
     TerminalCapture, TerminalFrame, TerminalFrameBody, TerminalInput, TerminalInputBytes,
     TerminalName, TerminalReply, TerminalRequest,
 };
@@ -190,14 +189,13 @@ impl TerminalSignalTransport {
             LaneSequence::new(sequence.saturating_add(1)),
         );
         let request = Request::from_payload(request);
-        let verb = request.operations().head().verb;
         let frame = TerminalFrame::new(TerminalFrameBody::Request { exchange, request });
         stream.write_all(&frame.encode_length_prefixed()?)?;
         stream.flush()?;
 
         let mut reader = BufReader::new(stream);
         match self.read_reply_frame(&mut reader)?.into_body() {
-            TerminalFrameBody::Reply { reply, .. } => Self::terminal_reply(reply, verb),
+            TerminalFrameBody::Reply { reply, .. } => Self::terminal_reply(reply),
             other => Err(crate::Error::UnexpectedSignalFrame {
                 got: format!("{other:?}"),
             }),
@@ -215,13 +213,10 @@ impl TerminalSignalTransport {
         Ok(TerminalFrame::decode_length_prefixed(&bytes)?)
     }
 
-    fn terminal_reply(reply: Reply<TerminalReply>, verb: SignalVerb) -> Result<TerminalReply> {
+    fn terminal_reply(reply: Reply<TerminalReply>) -> Result<TerminalReply> {
         match reply {
             Reply::Accepted { per_operation, .. } => match per_operation.into_head() {
-                SubReply::Ok {
-                    verb: reply_verb,
-                    payload,
-                } if reply_verb == verb => Ok(payload),
+                SubReply::Ok(payload) => Ok(payload),
                 other => Err(crate::Error::UnexpectedSignalFrame {
                     got: format!("{other:?}"),
                 }),
