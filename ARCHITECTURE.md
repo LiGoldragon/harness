@@ -119,15 +119,15 @@ printing untyped text.
 
 The harness is the destination push primitive for its own transcript
 state. The subscription contract is `signal-harness`'s
-`HarnessTranscriptStream` (Subscribe → typed snapshot → typed deltas
-→ typed Retract → typed final ack → end). The runtime side owns the
+`HarnessTranscriptStream` (Watch → typed snapshot → typed deltas
+→ typed Unwatch → typed final ack → end). The runtime side owns the
 producer plane.
 
 Three named actors carry the producer side:
 
 | Actor | Owns |
 |---|---|
-| `TranscriptSubscriptionManager` | The set of open subscriptions: per-token handler reference, registration metadata, ingress count. Routes `SubscribeHarnessTranscript` and `HarnessTranscriptRetraction` to handlers. |
+| `TranscriptSubscriptionManager` | The set of open subscriptions: per-token handler reference, registration metadata, ingress count. Routes `WatchHarnessTranscript` and `UnwatchHarnessTranscript` to handlers. |
 | `TranscriptStreamingReplyHandler` | One per open subscription. Holds the connection, the per-stream `HarnessTranscriptToken`, the sequence cursor, the local outbound buffer, and the close-ack flag. Receives `DeliverTranscriptDelta` from the publisher; writes the event onto the wire. |
 | `TranscriptDeltaPublisher` | The fanout plane. Receives `TranscriptObservation` records from the `Harness` runtime; sends `DeliverTranscriptDelta { observation }` to every registered handler. |
 
@@ -142,10 +142,10 @@ The full canonical five-state lifecycle (per
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Subscribing : SubscribeHarnessTranscript
+    [*] --> Subscribing : WatchHarnessTranscript
     Subscribing --> Streaming : HarnessTranscriptSnapshot (open snapshot)
     Streaming --> Streaming : TranscriptObservation (delta)
-    Streaming --> Retracting : HarnessTranscriptRetraction (Retract)
+    Streaming --> Retracting : UnwatchHarnessTranscript
     Retracting --> Closed : HarnessSubscriptionRetracted (final ack)
     Closed --> [*]
 ```
@@ -228,14 +228,14 @@ This repo does not own:
   operations that are not built yet.
 - The daemon does not print untyped text errors for recognized unfinished
   operations.
-- The daemon accepts `SubscribeHarnessTranscript`, replies with a typed
+- The daemon accepts `WatchHarnessTranscript`, replies with a typed
   `HarnessTranscriptSnapshot` carrying the per-stream token and the
   current sequence pointer, then pushes `TranscriptObservation` events
   as transcript lines become visible.
 - Each open transcript subscription is owned by a per-subscription
   `TranscriptStreamingReplyHandler` actor; a slow consumer holds back
   its own stream and cannot block siblings.
-- The daemon accepts `HarnessTranscriptRetraction` for an open
+- The daemon accepts `UnwatchHarnessTranscript` for an open
   subscription, drains the in-flight delta queue, emits the final
   `HarnessSubscriptionRetracted` reply carrying the same token, and
   closes the stream.

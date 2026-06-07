@@ -13,12 +13,11 @@ use harness::{
     SocketMode, SupervisionFrameCodec,
 };
 use signal_core::{
-    ExchangeIdentifier, ExchangeLane, LaneSequence, NonEmpty, Operation, Reply, Request,
-    RequestRejectionReason, SessionEpoch, SignalVerb, SubReply,
+    ExchangeIdentifier as CoreExchangeIdentifier, NonEmpty as CoreNonEmpty, Reply as CoreReply,
+    SignalVerb, SubReply as CoreSubReply,
 };
 use signal_frame::{
-    ExchangeIdentifier as FrameExchangeIdentifier, ExchangeLane as FrameExchangeLane,
-    LaneSequence as FrameLaneSequence, Request as FrameRequest, SessionEpoch as FrameSessionEpoch,
+    ExchangeIdentifier, ExchangeLane, LaneSequence, Reply, Request, SessionEpoch, SubReply,
 };
 use signal_harness::{
     DeliveryCompleted, DeliveryFailed, DeliveryFailureReason, HarnessDaemonConfiguration,
@@ -180,13 +179,13 @@ impl TerminalFixtureFrameCodec {
     fn write_reply(
         &self,
         stream: &mut UnixStream,
-        exchange: ExchangeIdentifier,
+        exchange: CoreExchangeIdentifier,
         verb: SignalVerb,
         reply: TerminalReply,
     ) -> harness::Result<()> {
         let frame = TerminalFrame::new(TerminalFrameBody::Reply {
             exchange,
-            reply: Reply::completed(NonEmpty::single(SubReply::Ok {
+            reply: CoreReply::completed(CoreNonEmpty::single(CoreSubReply::Ok {
                 verb,
                 payload: reply,
             })),
@@ -208,7 +207,7 @@ impl Default for TerminalFixtureFrameCodec {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ReceivedTerminalRequest {
-    exchange: ExchangeIdentifier,
+    exchange: CoreExchangeIdentifier,
     verb: SignalVerb,
     request: TerminalRequest,
 }
@@ -378,32 +377,21 @@ fn configured_instance(
 }
 
 #[test]
-fn harness_frame_codec_rejects_mismatched_signal_verb() {
-    let request = Request::from_operations(NonEmpty::single(Operation::new(
-        SignalVerb::Assert,
-        HarnessRequest::HarnessStatusQuery(HarnessStatusQuery {
-            harness: HarnessName::new("operator"),
-        }),
-    )));
+fn harness_frame_codec_reads_contract_local_request() {
+    let request = HarnessRequest::HarnessStatusQuery(HarnessStatusQuery {
+        harness: HarnessName::new("operator"),
+    });
     let frame = HarnessFrame::new(HarnessFrameBody::Request {
         exchange: test_exchange(),
-        request,
+        request: Request::from_payload(request.clone()),
     });
     let bytes = frame.encode_length_prefixed().expect("frame encodes");
     let mut input = bytes.as_slice();
-    let error = HarnessFrameCodec::default()
+    let received = HarnessFrameCodec::default()
         .read_request(&mut input)
-        .expect_err("mismatched verb is rejected");
+        .expect("contract-local request is read");
 
-    match error {
-        harness::Error::InvalidSignalRequest { reason } => {
-            assert_eq!(
-                reason,
-                RequestRejectionReason::VerbPayloadMismatch { index: 0 }
-            );
-        }
-        other => panic!("expected typed signal request rejection, got {other:?}"),
-    }
+    assert_eq!(received.request(), &request);
 }
 
 #[test]
@@ -838,7 +826,7 @@ fn write_request(stream: &mut UnixStream, request: HarnessRequest) {
 fn write_supervision_request(stream: &mut UnixStream, request: SupervisionRequest) {
     let frame = SupervisionFrame::new(SupervisionFrameBody::Request {
         exchange: test_supervision_exchange(),
-        request: FrameRequest::from_payload(request),
+        request: Request::from_payload(request),
     });
     let bytes = frame
         .encode_length_prefixed()
@@ -872,7 +860,7 @@ fn read_event(stream: &mut UnixStream) -> HarnessEvent {
     match frame.into_body() {
         HarnessFrameBody::Reply { reply, .. } => match reply {
             Reply::Accepted { per_operation, .. } => match per_operation.into_head() {
-                SubReply::Ok { payload, .. } => payload,
+                SubReply::Ok(payload) => payload,
                 other => panic!("expected ok harness sub-reply, got {other:?}"),
             },
             Reply::Rejected { reason } => panic!("expected harness event reply, got {reason:?}"),
@@ -889,11 +877,11 @@ fn test_exchange() -> ExchangeIdentifier {
     )
 }
 
-fn test_supervision_exchange() -> FrameExchangeIdentifier {
-    FrameExchangeIdentifier::new(
-        FrameSessionEpoch::new(0),
-        FrameExchangeLane::Connector,
-        FrameLaneSequence::first(),
+fn test_supervision_exchange() -> ExchangeIdentifier {
+    ExchangeIdentifier::new(
+        SessionEpoch::new(0),
+        ExchangeLane::Connector,
+        LaneSequence::first(),
     )
 }
 

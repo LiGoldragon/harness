@@ -10,6 +10,9 @@ pub enum Error {
     #[error("signal frame: {0}")]
     SignalFrame(#[from] signal_core::FrameError),
 
+    #[error("harness signal frame: {0}")]
+    HarnessSignalFrame(#[from] signal_frame::FrameError),
+
     #[error("actor call: {0}")]
     ActorCall(String),
 

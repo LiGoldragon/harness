@@ -725,12 +725,12 @@ dependencies = [
 [[package]]
 name = "signal-harness"
 version = "0.1.0"
-source = "git+https://github.com/LiGoldragon/signal-harness.git?branch=main#0cf61f9ac324541a7b421f0327cd5d8ecd702727"
+source = "git+https://github.com/LiGoldragon/signal-harness.git?branch=main#ca195468421e0963278b4990cb8b6c209864573a"
 dependencies = [
  "nota-codec",
  "nota-config",
  "rkyv",
- "signal-core",
+ "signal-frame",
  "signal-persona",
  "signal-persona-origin 0.1.0 (git+https://github.com/LiGoldragon/signal-persona-origin.git)",
  "thiserror",
