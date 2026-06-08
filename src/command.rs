@@ -1,60 +1,20 @@
 use std::path::{Path, PathBuf};
 
 use signal_harness::HarnessDaemonConfiguration;
-use triad_runtime::{ComponentArgument, ComponentCommand, SignalFile};
 
-use crate::{HarnessDaemon, Result};
+use crate::Result;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct HarnessDaemonCommand {
-    command: ComponentCommand,
-}
-
+/// A binary rkyv `HarnessDaemonConfiguration` file: the single startup argument
+/// the harness daemon accepts. Daemons never parse NOTA (hard override) — the
+/// `signal-harness` startup contract is signal-encoded into this file before it
+/// reaches the process. Deploy/bootstrap tools and tests use this to write the
+/// file the manager spawns `harness-daemon <path>` against.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HarnessDaemonConfigurationFile {
     path: PathBuf,
 }
 
-impl HarnessDaemonCommand {
-    pub fn from_environment() -> Self {
-        Self {
-            command: ComponentCommand::from_environment(),
-        }
-    }
-
-    pub fn from_arguments<Arguments, Argument>(arguments: Arguments) -> Self
-    where
-        Arguments: IntoIterator<Item = Argument>,
-        Argument: Into<String>,
-    {
-        Self {
-            command: ComponentCommand::from_arguments(arguments),
-        }
-    }
-
-    pub fn configuration(&self) -> Result<HarnessDaemonConfiguration> {
-        match self.command.signal_file_argument()? {
-            ComponentArgument::SignalFile(file) => {
-                HarnessDaemonConfigurationFile::from_signal_file(file).configuration()
-            }
-            ComponentArgument::InlineNota(_) | ComponentArgument::NotaFile(_) => {
-                Err(triad_runtime::ArgumentError::ExpectedSignalFile.into())
-            }
-        }
-    }
-
-    pub fn run(&self) -> Result<()> {
-        HarnessDaemon::from_configuration(self.configuration()?).run()
-    }
-}
-
 impl HarnessDaemonConfigurationFile {
-    pub fn from_signal_file(file: SignalFile) -> Self {
-        Self {
-            path: file.into_path(),
-        }
-    }
-
     pub fn new(path: impl Into<PathBuf>) -> Self {
         Self { path: path.into() }
     }

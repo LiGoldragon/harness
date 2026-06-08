@@ -2,12 +2,10 @@ use std::io::{BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 
-use signal_frame::{
-    ExchangeIdentifier, ExchangeLane, LaneSequence, Reply, Request, SessionEpoch, SubReply,
-};
+use signal_frame::{ExchangeIdentifier, ExchangeLane, LaneSequence, Reply, SessionEpoch, SubReply};
 use signal_terminal::{
-    TerminalCapture, TerminalFrame, TerminalFrameBody, TerminalInput, TerminalInputBytes,
-    TerminalName, TerminalReply, TerminalRequest,
+    Frame as TerminalFrame, FrameBody as TerminalFrameBody, Input as TerminalInputRoot,
+    Output as TerminalOutput, TerminalCapture, TerminalInput, TerminalInputBytes, TerminalName,
 };
 
 use crate::{HarnessIdentifier, Result};
@@ -20,7 +18,7 @@ pub struct HarnessTerminalBinding {
 
 impl HarnessTerminalBinding {
     pub fn for_harness(harness: HarnessIdentifier) -> Self {
-        let terminal = TerminalName::new(harness.as_str());
+        let terminal = TerminalName::new(harness.as_str().to_owned());
         Self { harness, terminal }
     }
 
@@ -36,19 +34,15 @@ impl HarnessTerminalBinding {
         &self.terminal
     }
 
-    pub fn input_request(&self, bytes: Vec<u8>) -> TerminalRequest {
-        TerminalInput {
+    pub fn input_request(&self, bytes: Vec<u8>) -> TerminalInputRoot {
+        TerminalInputRoot::TerminalInput(TerminalInput {
             terminal: self.terminal.clone(),
-            bytes: TerminalInputBytes::new(bytes),
-        }
-        .into()
+            bytes: TerminalInputBytes::new(bytes.into_iter().map(u64::from).collect()),
+        })
     }
 
-    pub fn capture_request(&self) -> TerminalRequest {
-        TerminalCapture {
-            terminal: self.terminal.clone(),
-        }
-        .into()
+    pub fn capture_request(&self) -> TerminalInputRoot {
+        TerminalInputRoot::TerminalCapture(TerminalCapture(self.terminal.clone()))
     }
 }
 
@@ -78,7 +72,7 @@ pub enum TerminalDeliveryPath {
 pub struct TerminalDeliveryReceipt {
     delivered: bool,
     path: TerminalDeliveryPath,
-    accepted_event: Option<TerminalReply>,
+    accepted_event: Option<TerminalOutput>,
 }
 
 impl TerminalDeliveryReceipt {
@@ -90,7 +84,7 @@ impl TerminalDeliveryReceipt {
         }
     }
 
-    fn from_transport(delivered: bool, accepted_event: TerminalReply) -> Self {
+    fn from_transport(delivered: bool, accepted_event: TerminalOutput) -> Self {
         Self {
             delivered,
             path: TerminalDeliveryPath::TerminalTransport,
@@ -106,7 +100,7 @@ impl TerminalDeliveryReceipt {
         self.path
     }
 
-    pub fn accepted_event(&self) -> Option<&TerminalReply> {
+    pub fn accepted_event(&self) -> Option<&TerminalOutput> {
         self.accepted_event.as_ref()
     }
 }
@@ -158,7 +152,7 @@ impl HarnessTerminalDelivery {
         bytes.push(b'\r');
         let accepted_event = TerminalSignalTransport::new(path)
             .exchange(binding.input_request(bytes), self.delivered_input_count)?;
-        let delivered = matches!(accepted_event, TerminalReply::TerminalInputAccepted(_));
+        let delivered = matches!(accepted_event, TerminalOutput::TerminalInputAccepted(_));
         if delivered {
             self.delivered_input_count = self.delivered_input_count.saturating_add(1);
         }
@@ -181,15 +175,14 @@ impl TerminalSignalTransport {
         }
     }
 
-    fn exchange(&self, request: TerminalRequest, sequence: u64) -> Result<TerminalReply> {
+    fn exchange(&self, request: TerminalInputRoot, sequence: u64) -> Result<TerminalOutput> {
         let mut stream = UnixStream::connect(&self.socket_path)?;
         let exchange = ExchangeIdentifier::new(
             SessionEpoch::new(0),
             ExchangeLane::Connector,
             LaneSequence::new(sequence.saturating_add(1)),
         );
-        let request = Request::from_payload(request);
-        let frame = TerminalFrame::new(TerminalFrameBody::Request { exchange, request });
+        let frame = request.into_frame(exchange);
         stream.write_all(&frame.encode_length_prefixed()?)?;
         stream.flush()?;
 
@@ -213,7 +206,7 @@ impl TerminalSignalTransport {
         Ok(TerminalFrame::decode_length_prefixed(&bytes)?)
     }
 
-    fn terminal_reply(reply: Reply<TerminalReply>) -> Result<TerminalReply> {
+    fn terminal_reply(reply: Reply<TerminalOutput>) -> Result<TerminalOutput> {
         match reply {
             Reply::Accepted { per_operation, .. } => match per_operation.into_head() {
                 SubReply::Ok(payload) => Ok(payload),

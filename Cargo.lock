@@ -203,11 +203,11 @@ dependencies = [
  "kameo",
  "message",
  "rkyv",
+ "schema-rust-next",
  "serde_json",
- "signal-engine-management",
  "signal-frame",
  "signal-harness",
- "signal-persona-origin",
+ "signal-persona",
  "signal-router",
  "signal-terminal",
  "tempfile",
@@ -332,16 +332,14 @@ checksum = "6b947ae49db0d222b1dbc6b113ce7248a3fc3a6ca21b696717bfc000ba4484d8"
 
 [[package]]
 name = "message"
-version = "0.2.1"
-source = "git+https://github.com/LiGoldragon/message.git?branch=main#8ceb0e64196982d288fad8e6af839b3a42e5ccc7"
+version = "0.3.0"
+source = "git+https://github.com/LiGoldragon/message.git?branch=main#7fe45bf55c55c65f46603ce114ea247543a7e72c"
 dependencies = [
  "nota-next",
  "rkyv",
  "schema-rust-next",
- "signal-engine-management",
  "signal-frame",
  "signal-message",
- "signal-persona-origin",
  "thiserror",
  "tokio",
  "triad-runtime",
@@ -381,7 +379,7 @@ dependencies = [
 [[package]]
 name = "nota-next"
 version = "0.3.0"
-source = "git+https://github.com/LiGoldragon/nota-next.git?branch=main#f0e435a629f8312b173b0f8564c17ee0a4001561"
+source = "git+https://github.com/LiGoldragon/nota-next.git?branch=main#ae5c25cd42b65512be941b274922c9e17bf67176"
 dependencies = [
  "nota-next-derive",
  "rkyv",
@@ -390,7 +388,7 @@ dependencies = [
 [[package]]
 name = "nota-next-derive"
 version = "0.2.0"
-source = "git+https://github.com/LiGoldragon/nota-next.git?branch=main#f0e435a629f8312b173b0f8564c17ee0a4001561"
+source = "git+https://github.com/LiGoldragon/nota-next.git?branch=main#ae5c25cd42b65512be941b274922c9e17bf67176"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -547,8 +545,8 @@ dependencies = [
 
 [[package]]
 name = "schema-rust-next"
-version = "0.3.0"
-source = "git+https://github.com/LiGoldragon/schema-rust-next.git?branch=main#a35eff74419d03e36720765e09c9e53fe87a3089"
+version = "0.5.1"
+source = "git+https://github.com/LiGoldragon/schema-rust-next.git?branch=main#7282446ed3f41663d9e9ef1753a9a2b3514cf829"
 dependencies = [
  "prettyplease",
  "proc-macro2",
@@ -608,20 +606,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "signal-engine-management"
-version = "0.1.0"
-source = "git+https://github.com/LiGoldragon/signal-engine-management.git?branch=main#305b7031668fed76c43af0d28cf70b94c933089d"
-dependencies = [
- "nota-next",
- "rkyv",
- "signal-frame",
- "signal-persona-origin",
-]
-
-[[package]]
 name = "signal-frame"
-version = "0.1.0"
-source = "git+https://github.com/LiGoldragon/signal-frame.git?branch=main#904bb2fdb0210bbeec9f9f4edc9f8b88341522a3"
+version = "0.2.1"
+source = "git+https://github.com/LiGoldragon/signal-frame.git?branch=main#166bda84dc63bf8461fff11a41c43d6a1c92a941"
 dependencies = [
  "nota-next",
  "paste",
@@ -632,8 +619,8 @@ dependencies = [
 
 [[package]]
 name = "signal-frame-macros"
-version = "0.1.0"
-source = "git+https://github.com/LiGoldragon/signal-frame.git?branch=main#904bb2fdb0210bbeec9f9f4edc9f8b88341522a3"
+version = "0.1.1"
+source = "git+https://github.com/LiGoldragon/signal-frame.git?branch=main#166bda84dc63bf8461fff11a41c43d6a1c92a941"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -643,62 +630,57 @@ dependencies = [
 [[package]]
 name = "signal-harness"
 version = "0.1.0"
-source = "git+https://github.com/LiGoldragon/signal-harness.git?branch=main#39d38ea2e4576ee19849133ba1e7b6646b038afc"
+source = "git+https://github.com/LiGoldragon/signal-harness.git?branch=main#75b01c16681359dce15f39e076744d7c9d809365"
 dependencies = [
  "nota-next",
  "rkyv",
- "signal-engine-management",
  "signal-frame",
- "signal-persona-origin",
+ "signal-persona",
  "thiserror",
 ]
 
 [[package]]
 name = "signal-message"
-version = "0.1.0"
-source = "git+https://github.com/LiGoldragon/signal-message.git?branch=main#f84ec07b7339dc155170efbcbbfe49e974ff4f76"
+version = "0.2.0"
+source = "git+https://github.com/LiGoldragon/signal-message.git?branch=main#6a29eb1999f35a1f0d0c60ebe2cade3a5eee2d59"
 dependencies = [
  "nota-next",
  "rkyv",
- "signal-engine-management",
+ "schema-rust-next",
  "signal-frame",
- "signal-persona-origin",
  "thiserror",
 ]
 
 [[package]]
-name = "signal-persona-origin"
+name = "signal-persona"
 version = "0.1.0"
-source = "git+https://github.com/LiGoldragon/signal-persona-origin.git?branch=main#da2bee2e1a178f24a62d1eb5d3985e3937a79b5b"
+source = "git+https://github.com/LiGoldragon/signal-persona.git?branch=main#3d8f7eac1eb0a077d9ccb0d83a409b4a7be0b38c"
 dependencies = [
  "nota-next",
  "rkyv",
+ "signal-frame",
 ]
 
 [[package]]
 name = "signal-router"
 version = "0.1.0"
-source = "git+https://github.com/LiGoldragon/signal-router.git?branch=main#8f8c849e92d9560f454927d6bb3edb66474c084d"
+source = "git+https://github.com/LiGoldragon/signal-router.git?branch=main#a014a33a7edd9ec8b465b932552df41d6ab7a84a"
 dependencies = [
- "nota-next",
  "rkyv",
- "signal-engine-management",
+ "schema-rust-next",
  "signal-frame",
- "signal-message",
- "signal-persona-origin",
  "thiserror",
 ]
 
 [[package]]
 name = "signal-terminal"
-version = "0.1.0"
-source = "git+https://github.com/LiGoldragon/signal-terminal.git?branch=main#42766e8bc71d3f6f4a61794c73e7304e2dbf7b88"
+version = "0.2.0"
+source = "git+https://github.com/LiGoldragon/signal-terminal.git?branch=main#0a11eb3717b0e74d31cfd1f808a54e8d3b7229b2"
 dependencies = [
  "nota-next",
  "rkyv",
- "signal-engine-management",
+ "schema-rust-next",
  "signal-frame",
- "signal-persona-origin",
  "thiserror",
 ]
 
@@ -843,8 +825,8 @@ dependencies = [
 
 [[package]]
 name = "triad-runtime"
-version = "0.5.0"
-source = "git+https://github.com/LiGoldragon/triad-runtime.git?branch=main#0b1746d47b4f569413e41772eae3aefe6981385b"
+version = "0.6.0"
+source = "git+https://github.com/LiGoldragon/triad-runtime.git?branch=main#ae2e81755f8f1536329f372bdcc78dbbcd065999"
 dependencies = [
  "kameo",
  "rustix",

@@ -1,19 +1,23 @@
 pub mod command;
+pub mod configuration;
 pub mod daemon;
 pub mod delivery;
 pub mod error;
 pub mod harness;
 pub mod pi;
 pub mod runtime;
+pub mod schema;
 pub mod subscription;
 pub mod supervision;
 pub mod terminal;
 pub mod transcript;
 
-pub use command::{HarnessDaemonCommand, HarnessDaemonConfigurationFile};
+pub use command::HarnessDaemonConfigurationFile;
+pub use configuration::Configuration;
 pub use daemon::{
-    BoundHarnessDaemon, HarnessConnection, HarnessDaemon, HarnessFrameCodec, HarnessRequestHandler,
-    HarnessRuntimeConfiguration, SocketMode,
+    BoundHarnessInstances, HandleHarnessRequest, HarnessEngine, HarnessInstance,
+    HarnessProcessDaemon, HarnessRequestHandler, HarnessRuntimeConfiguration,
+    ReceivedHarnessRequest, WorkingHarnessEvent, WorkingSupervisionReply,
 };
 pub use delivery::{HarnessDeliveryAdapter, HarnessDeliveryReceipt};
 pub use error::{Error, Result};
@@ -24,6 +28,7 @@ pub use pi::{PiRpcDeliveryCommand, PiRpcDeliveryReceipt, PiRpcProcessConfigurati
 pub use runtime::{
     Harness, HarnessLifecycle, HarnessState, ReadState, RecordTranscriptLine, SetHarnessLifecycle,
 };
+pub use schema::daemon::{ComponentDaemon, DaemonEntry};
 pub use subscription::{
     CloseTranscriptSubscription, ClosedTranscriptSubscription, DeliverSnapshot,
     DeliverTranscriptDelta, EmitFinalRetractionAck, OpenTranscriptSubscription,
@@ -35,7 +40,8 @@ pub use subscription::{
     TranscriptSubscriptionManagerStatus, TranscriptSubscriptionSink,
 };
 pub use supervision::{
-    SupervisionFrameCodec, SupervisionListener, SupervisionProfile, SupervisionSocketMode,
+    HandleSupervisionRequest, ReceivedSupervisionRequest, SupervisionPhase, SupervisionPhaseReply,
+    SupervisionProfile,
 };
 pub use terminal::{
     HarnessTerminalBinding, HarnessTerminalDelivery, HarnessTerminalEndpoint, TerminalDeliveryPath,

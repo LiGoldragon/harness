@@ -10,19 +10,20 @@ use std::{
 
 use harness::HarnessDaemonConfigurationFile;
 use message::{Configuration as MessageConfiguration, command::Output as MessageCommandOutput};
-use signal_engine_management::{SocketMode as WireSocketMode, WirePath};
-use signal_frame::{ExchangeIdentifier, NonEmpty, Reply, SubReply};
+use signal_frame::ExchangeIdentifier;
 use signal_harness::{
     HarnessDaemonConfiguration, HarnessInstanceConfiguration, HarnessKind, HarnessName,
 };
-use signal_persona_origin::{OwnerIdentity, UnixUserIdentifier};
+use signal_persona::origin::{OwnerIdentity, UnixUserIdentifier};
+use signal_persona::{SocketMode as WireSocketMode, WirePath};
 use signal_router::{
-    Actor, ActorIdentifier, EndpointKind, EndpointTransport, GrantDirectMessage, RegisterActor,
-    RouterBootstrapDocument, RouterBootstrapOperation, RouterDaemonConfiguration,
+    Actor, EndpointKind, EndpointTransport, GrantDirectMessage,
+    OwnerIdentity as RouterOwnerIdentity, RegisterActor, RouterBootstrapDocument,
+    RouterBootstrapOperation, RouterDaemonConfiguration,
 };
 use signal_terminal::{
-    TerminalFrame, TerminalFrameBody, TerminalGeneration, TerminalInputAccepted, TerminalReply,
-    TerminalRequest,
+    Frame as TerminalFrame, FrameBody as TerminalFrameBody, Input as TerminalInputRoot,
+    Output as TerminalOutput, TerminalGeneration, TerminalInputAccepted,
 };
 use tempfile::TempDir;
 
@@ -212,15 +213,15 @@ impl MessageRouterHarnessE2e {
         let meta_socket = self.router_meta_socket();
         let supervision_socket = self.router_supervision_socket();
         let configuration = RouterDaemonConfiguration {
-            router_socket_path: WirePath::new(router_socket.display().to_string()),
-            router_socket_mode: WireSocketMode::new(0o600),
-            meta_router_socket_path: WirePath::new(meta_socket.display().to_string()),
-            meta_router_socket_mode: WireSocketMode::new(0o600),
-            supervision_socket_path: WirePath::new(supervision_socket.display().to_string()),
-            supervision_socket_mode: WireSocketMode::new(0o600),
-            store_path: WirePath::new(self.root_path().join("router.sema").display().to_string()),
-            bootstrap_path: Some(WirePath::new(bootstrap_path.display().to_string())),
-            owner_identity: OwnerIdentity::UnixUser(UnixUserIdentifier::new(self.current_uid())),
+            router_socket_path: router_socket.display().to_string(),
+            router_socket_mode: 0o600,
+            meta_router_socket_path: meta_socket.display().to_string(),
+            meta_router_socket_mode: 0o600,
+            supervision_socket_path: supervision_socket.display().to_string(),
+            supervision_socket_mode: 0o600,
+            store_path: self.root_path().join("router.sema").display().to_string(),
+            bootstrap_path: Some(bootstrap_path.display().to_string()),
+            owner_identity: RouterOwnerIdentity::UnixUser(u64::from(self.current_uid())),
         };
         RouterConfigurationFile::write(&configuration_path, &configuration);
         let process = ManagedProcess::spawn(
@@ -228,9 +229,11 @@ impl MessageRouterHarnessE2e {
             self.binaries.router_daemon(),
             &[configuration_path],
         );
+        // The schema-emitted router daemon binds only its working and meta
+        // tiers; supervision rides the meta tier, so there is no separate
+        // supervision socket to wait on.
         SocketWait::new(&router_socket).wait();
         SocketWait::new(&meta_socket).wait();
-        SocketWait::new(&supervision_socket).wait();
         process
     }
 
@@ -259,33 +262,33 @@ struct BootstrapFile;
 
 impl BootstrapFile {
     fn write(path: &Path, harness_socket: &Path) {
-        let document = RouterBootstrapDocument::new(vec![
-            RouterBootstrapOperation::RegisterActor(RegisterActor::new(Actor::new(
-                ActorIdentifier::new(AGENT_A),
-                std::process::id(),
-                Some(EndpointTransport::new(
-                    EndpointKind::HarnessSocket,
-                    harness_socket.display().to_string(),
-                    None,
-                )),
-            ))),
-            RouterBootstrapOperation::RegisterActor(RegisterActor::new(Actor::new(
-                ActorIdentifier::new(AGENT_B),
-                std::process::id(),
-                Some(EndpointTransport::new(
-                    EndpointKind::HarnessSocket,
-                    harness_socket.display().to_string(),
-                    None,
-                )),
-            ))),
-            RouterBootstrapOperation::GrantDirectMessage(GrantDirectMessage::new(
-                ActorIdentifier::new(AGENT_A),
-                ActorIdentifier::new(AGENT_B),
-            )),
-            RouterBootstrapOperation::GrantDirectMessage(GrantDirectMessage::new(
-                ActorIdentifier::new(AGENT_B),
-                ActorIdentifier::new(AGENT_A),
-            )),
+        let document = RouterBootstrapDocument(vec![
+            RouterBootstrapOperation::RegisterActor(RegisterActor(Actor {
+                name: AGENT_A.to_string(),
+                process: u64::from(std::process::id()),
+                endpoint: Some(EndpointTransport {
+                    kind: EndpointKind::HarnessSocket,
+                    target: harness_socket.display().to_string(),
+                    auxiliary: None,
+                }),
+            })),
+            RouterBootstrapOperation::RegisterActor(RegisterActor(Actor {
+                name: AGENT_B.to_string(),
+                process: u64::from(std::process::id()),
+                endpoint: Some(EndpointTransport {
+                    kind: EndpointKind::HarnessSocket,
+                    target: harness_socket.display().to_string(),
+                    auxiliary: None,
+                }),
+            })),
+            RouterBootstrapOperation::GrantDirectMessage(GrantDirectMessage {
+                from: AGENT_A.to_string(),
+                to: AGENT_B.to_string(),
+            }),
+            RouterBootstrapOperation::GrantDirectMessage(GrantDirectMessage {
+                from: AGENT_B.to_string(),
+                to: AGENT_A.to_string(),
+            }),
         ]);
         let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&document)
             .expect("encode router bootstrap archive");
@@ -471,12 +474,9 @@ impl TerminalFixtureFrameCodec {
         &self,
         stream: &mut std::os::unix::net::UnixStream,
         exchange: ExchangeIdentifier,
-        reply: TerminalReply,
+        output: TerminalOutput,
     ) -> harness::Result<()> {
-        let frame = TerminalFrame::new(TerminalFrameBody::Reply {
-            exchange,
-            reply: Reply::committed(NonEmpty::single(SubReply::Ok(reply))),
-        });
+        let frame = output.into_reply_frame(exchange);
         let bytes = frame.encode_length_prefixed()?;
         stream.write_all(&bytes)?;
         stream.flush()?;
@@ -495,7 +495,7 @@ impl Default for TerminalFixtureFrameCodec {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ReceivedTerminalRequest {
     exchange: ExchangeIdentifier,
-    request: TerminalRequest,
+    request: TerminalInputRoot,
 }
 
 struct RecordingTerminalSocket {
@@ -519,17 +519,17 @@ impl RecordingTerminalSocket {
                 .read_request(&mut stream)
                 .expect("terminal socket reads Signal input request");
             match received_request.request {
-                TerminalRequest::TerminalInput(input) => {
+                TerminalInputRoot::TerminalInput(input) => {
                     sender
-                        .send(input.bytes.as_slice().to_vec())
+                        .send(input.bytes.0.iter().map(|byte| *byte as u8).collect())
                         .expect("terminal socket reports bytes");
                     codec
                         .write_reply(
                             &mut stream,
                             received_request.exchange,
-                            TerminalReply::TerminalInputAccepted(TerminalInputAccepted {
+                            TerminalOutput::TerminalInputAccepted(TerminalInputAccepted {
                                 terminal: input.terminal,
-                                generation: TerminalGeneration::new(1),
+                                generation: TerminalGeneration(1),
                             }),
                         )
                         .expect("terminal socket writes Signal acceptance");
@@ -583,17 +583,17 @@ impl ReplyingTerminalSocket {
                 .read_request(&mut stream)
                 .expect("terminal socket reads Signal input request");
             match received_request.request {
-                TerminalRequest::TerminalInput(input) => {
+                TerminalInputRoot::TerminalInput(input) => {
                     sender
-                        .send(input.bytes.as_slice().to_vec())
+                        .send(input.bytes.0.iter().map(|byte| *byte as u8).collect())
                         .expect("terminal socket reports bytes");
                     codec
                         .write_reply(
                             &mut stream,
                             received_request.exchange,
-                            TerminalReply::TerminalInputAccepted(TerminalInputAccepted {
+                            TerminalOutput::TerminalInputAccepted(TerminalInputAccepted {
                                 terminal: input.terminal,
-                                generation: TerminalGeneration::new(1),
+                                generation: TerminalGeneration(1),
                             }),
                         )
                         .expect("terminal socket writes Signal acceptance");

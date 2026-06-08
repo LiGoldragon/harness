@@ -1,19 +1,15 @@
-use std::io::{Read, Write};
-use std::os::unix::fs::PermissionsExt;
-use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::PathBuf;
-use std::thread::JoinHandle;
-
 use kameo::actor::{Actor, ActorRef, Spawn};
 use kameo::error::Infallible;
 use kameo::message::{Context, Message};
-use signal_engine_management::{
+use signal_frame::ExchangeIdentifier;
+use signal_persona::{
     ComponentHealth, ComponentHealthReport, ComponentIdentity, ComponentKind, ComponentName,
     ComponentReady, EngineManagementProtocolVersion, Frame as SupervisionFrame, FrameBody,
     Operation as SupervisionRequest, Presence, Query as SupervisionQuery,
     Reply as SupervisionReply, StopAcknowledgement,
 };
-use signal_frame::{ExchangeIdentifier, NonEmpty, Reply, SubReply};
+
+use crate::error::{Error, Result};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SupervisionProfile {
@@ -32,60 +28,10 @@ impl SupervisionProfile {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SupervisionSocketMode(u32);
-
-impl SupervisionSocketMode {
-    pub const fn from_octal(value: u32) -> Self {
-        Self(value)
-    }
-
-    pub const fn as_octal(self) -> u32 {
-        self.0
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SupervisionListener {
-    profile: SupervisionProfile,
-    socket: PathBuf,
-    mode: SupervisionSocketMode,
-}
-
-impl SupervisionListener {
-    pub fn new(
-        profile: SupervisionProfile,
-        socket: impl Into<PathBuf>,
-        mode: SupervisionSocketMode,
-    ) -> Self {
-        Self {
-            profile,
-            socket: socket.into(),
-            mode,
-        }
-    }
-
-    pub fn spawn(self) -> std::io::Result<SupervisionHandle> {
-        if let Some(parent) = self.socket.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let _ = std::fs::remove_file(&self.socket);
-        let listener = UnixListener::bind(&self.socket)?;
-        std::fs::set_permissions(
-            &self.socket,
-            std::fs::Permissions::from_mode(self.mode.as_octal()),
-        )?;
-        let server = SupervisionServer::new(self.profile, listener);
-        Ok(SupervisionHandle {
-            _thread: std::thread::spawn(move || server.run()),
-        })
-    }
-}
-
-pub struct SupervisionHandle {
-    _thread: JoinHandle<()>,
-}
-
+/// The engine-management lifecycle actor — announce, readiness, health, and
+/// graceful stop. The schema-emitted daemon shell accepts the owner-only
+/// supervision (meta) connection and the component drives this actor; the
+/// mailbox serialises every supervision exchange.
 #[derive(Debug)]
 pub struct SupervisionPhase {
     profile: SupervisionProfile,
@@ -100,10 +46,19 @@ impl SupervisionPhase {
         }
     }
 
-    async fn start(profile: SupervisionProfile) -> ActorRef<Self> {
+    pub async fn start(profile: SupervisionProfile) -> ActorRef<Self> {
         let reference = Self::spawn(Self::new(profile));
         reference.wait_for_startup().await;
         reference
+    }
+
+    pub async fn stop(reference: ActorRef<Self>) -> Result<()> {
+        reference
+            .stop_gracefully()
+            .await
+            .map_err(|error| Error::ActorCall(error.to_string()))?;
+        reference.wait_for_shutdown().await;
+        Ok(())
     }
 
     fn reply(&mut self, request: SupervisionRequest) -> SupervisionReply {
@@ -137,8 +92,8 @@ impl SupervisionPhase {
 }
 
 #[derive(Debug, kameo::Reply)]
-struct SupervisionPhaseReply {
-    reply: SupervisionReply,
+pub struct SupervisionPhaseReply {
+    pub reply: SupervisionReply,
 }
 
 impl Actor for SupervisionPhase {
@@ -154,8 +109,8 @@ impl Actor for SupervisionPhase {
 }
 
 #[derive(Debug)]
-struct HandleSupervisionRequest {
-    request: SupervisionRequest,
+pub struct HandleSupervisionRequest {
+    pub request: SupervisionRequest,
 }
 
 impl Message<HandleSupervisionRequest> for SupervisionPhase {
@@ -172,155 +127,32 @@ impl Message<HandleSupervisionRequest> for SupervisionPhase {
     }
 }
 
-struct SupervisionServer {
-    profile: SupervisionProfile,
-    listener: UnixListener,
-    codec: SupervisionFrameCodec,
-}
-
-impl SupervisionServer {
-    fn new(profile: SupervisionProfile, listener: UnixListener) -> Self {
-        Self {
-            profile,
-            listener,
-            codec: SupervisionFrameCodec::new(1024 * 1024),
-        }
-    }
-
-    fn run(self) {
-        let runtime = tokio::runtime::Runtime::new().expect("supervision runtime starts");
-        let phase = runtime.block_on(SupervisionPhase::start(self.profile.clone()));
-        for incoming in self.listener.incoming() {
-            let Ok(mut stream) = incoming else {
-                continue;
-            };
-            let _ = self.serve_connection(&runtime, &phase, &mut stream);
-        }
-    }
-
-    fn serve_connection(
-        &self,
-        runtime: &tokio::runtime::Runtime,
-        phase: &ActorRef<SupervisionPhase>,
-        stream: &mut UnixStream,
-    ) -> std::io::Result<()> {
-        while let Ok(request) = self.codec.read_request(stream) {
-            let reply = runtime
-                .block_on(
-                    phase
-                        .ask(HandleSupervisionRequest {
-                            request: request.request,
-                        })
-                        .send(),
-                )
-                .map_err(io_error)?;
-            self.codec
-                .write_reply(stream, request.exchange, reply.reply)?;
-        }
-        Ok(())
-    }
-}
-
-#[derive(Clone, Copy)]
-pub struct SupervisionFrameCodec {
-    maximum_frame_bytes: usize,
-}
-
-impl SupervisionFrameCodec {
-    pub const fn new(maximum_frame_bytes: usize) -> Self {
-        Self {
-            maximum_frame_bytes,
-        }
-    }
-
-    pub fn read_reply(&self, reader: &mut impl Read) -> std::io::Result<SupervisionReply> {
-        let frame = self.read_frame(reader)?;
-        match frame.into_body() {
-            FrameBody::Reply { reply, .. } => match reply {
-                Reply::Accepted { per_operation, .. } => {
-                    let (sub_reply, tail) = per_operation.into_head_and_tail();
-                    if !tail.is_empty() {
-                        return Err(io_error(format!(
-                            "expected one supervision reply operation, got {}",
-                            tail.len() + 1
-                        )));
-                    }
-                    match sub_reply {
-                        SubReply::Ok(payload) => Ok(payload),
-                        other => Err(io_error(format!("{other:?}"))),
-                    }
-                }
-                Reply::Rejected { reason } => Err(io_error(reason)),
-            },
-            other => Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("unexpected supervision frame body: {other:?}"),
-            )),
-        }
-    }
-
-    fn read_request(&self, reader: &mut impl Read) -> std::io::Result<ReceivedSupervisionRequest> {
-        let frame = self.read_frame(reader)?;
-        match frame.into_body() {
-            FrameBody::Request { exchange, request } => {
-                let mut operations = request.payloads.into_vec();
-                if operations.len() != 1 {
-                    return Err(io_error(format!(
-                        "expected one supervision operation, got {}",
-                        operations.len()
-                    )));
-                }
-                Ok(ReceivedSupervisionRequest {
-                    exchange,
-                    request: operations.remove(0),
-                })
-            }
-            other => Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("unexpected supervision frame body: {other:?}"),
-            )),
-        }
-    }
-
-    fn write_reply(
-        &self,
-        writer: &mut impl Write,
-        exchange: ExchangeIdentifier,
-        reply: SupervisionReply,
-    ) -> std::io::Result<()> {
-        let frame = SupervisionFrame::new(FrameBody::Reply {
-            exchange,
-            reply: Reply::committed(NonEmpty::single(SubReply::Ok(reply))),
-        });
-        let bytes = frame.encode_length_prefixed().map_err(io_error)?;
-        writer.write_all(bytes.as_slice())?;
-        writer.flush()
-    }
-
-    fn read_frame(&self, reader: &mut impl Read) -> std::io::Result<SupervisionFrame> {
-        let mut prefix = [0_u8; 4];
-        reader.read_exact(&mut prefix)?;
-        let length = u32::from_be_bytes(prefix) as usize;
-        if length > self.maximum_frame_bytes {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("supervision frame length {length} exceeds maximum"),
-            ));
-        }
-        let mut bytes = Vec::with_capacity(4 + length);
-        bytes.extend_from_slice(&prefix);
-        bytes.resize(4 + length, 0);
-        reader.read_exact(&mut bytes[4..])?;
-        SupervisionFrame::decode_length_prefixed(bytes.as_slice()).map_err(io_error)
-    }
-}
-
+/// One decoded engine-management request plus its exchange identifier, as the
+/// daemon shell's owner-only meta (supervision) connection hook delivers it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ReceivedSupervisionRequest {
-    exchange: ExchangeIdentifier,
-    request: SupervisionRequest,
+pub struct ReceivedSupervisionRequest {
+    pub exchange: ExchangeIdentifier,
+    pub request: SupervisionRequest,
 }
 
-fn io_error(error: impl std::fmt::Display) -> std::io::Error {
-    std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
+impl ReceivedSupervisionRequest {
+    /// Decode one engine-management request off the bare (non-length-prefixed)
+    /// supervision `Frame` body the daemon shell delivers after stripping its
+    /// outer length-prefixed envelope.
+    pub fn decode(body: &[u8]) -> Result<Self> {
+        match SupervisionFrame::decode(body)?.into_body() {
+            FrameBody::Request { exchange, request } => {
+                let (request, tail) = request.payloads.into_head_and_tail();
+                if !tail.is_empty() {
+                    return Err(Error::UnexpectedSignalFrame {
+                        got: format!("expected one supervision operation, got {}", tail.len() + 1),
+                    });
+                }
+                Ok(Self { exchange, request })
+            }
+            other => Err(Error::UnexpectedSignalFrame {
+                got: format!("{other:?}"),
+            }),
+        }
+    }
 }

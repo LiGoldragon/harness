@@ -1,5 +1,6 @@
-use harness::{HarnessDaemonCommand, Result};
+use harness::HarnessProcessDaemon;
+use harness::schema::daemon::DaemonEntry;
 
-fn main() -> Result<()> {
-    HarnessDaemonCommand::from_environment().run()
+fn main() -> std::process::ExitCode {
+    <HarnessProcessDaemon as DaemonEntry>::run_to_exit_code()
 }

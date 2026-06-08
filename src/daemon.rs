@@ -1,10 +1,23 @@
+//! Harness's daemon hooks — the only daemon code harness hand-writes.
+//!
+//! The uniform daemon skeleton (argv parsing, async task-backed multi-listener
+//! binding, request gating, peer credentials, lifecycle, and the `ExitReport`
+//! entry) is emitted into `src/schema/daemon.rs` by schema-rust-next's daemon
+//! emitter. Harness adopts the `component_decoded` working tier: the ordinary
+//! harness socket keeps speaking the `signal-harness` contract wire (the
+//! component owns the per-connection `HarnessFrame` decode), and the existing
+//! kameo actors (`Harness`, `TranscriptSubscriptionManager`) stay the engine.
+//!
+//! The owner-only meta listener carries the engine-management supervision
+//! protocol (the second socket the manager binds): `handle_meta_connection`
+//! decodes a `signal-persona` `Frame` and drives `SupervisionPhase`.
+
 use std::collections::HashMap;
-use std::io::{BufReader, Read, Write};
-use std::os::unix::fs::PermissionsExt;
-use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 
-use kameo::actor::ActorRef;
+use kameo::actor::{Actor, ActorRef, Spawn};
+use kameo::error::Infallible;
+use kameo::message::{Context, Message};
 use signal_frame::{ExchangeIdentifier, NonEmpty, Reply, SubReply};
 use signal_harness::{
     DeliveryCompleted, DeliveryFailed, DeliveryFailureReason, HarnessDaemonConfiguration,
@@ -13,171 +26,95 @@ use signal_harness::{
     HarnessRequestUnimplemented, HarnessStatus, HarnessStatusQuery, HarnessUnimplementedReason,
     MessageDelivery,
 };
-
-use crate::{
-    Error, Harness, HarnessBinding, HarnessDeliveryAdapter, HarnessIdentifier, HarnessKind,
-    HarnessLifecycle, HarnessState, HarnessTerminalBinding, HarnessTerminalEndpoint,
-    PiRpcProcessConfiguration, PiRpcSession, ReadState, Result, SetHarnessLifecycle,
-    supervision::{SupervisionListener, SupervisionProfile, SupervisionSocketMode},
+use tokio::io::AsyncWriteExt;
+use tokio::sync::OnceCell;
+use triad_runtime::{
+    AcceptedConnection, FrameBody as LengthPrefixedFrameBody, FrameError, LengthPrefixedCodec,
 };
 
+use crate::schema::daemon::ComponentDaemon;
+use crate::supervision::{
+    HandleSupervisionRequest, ReceivedSupervisionRequest, SupervisionPhase, SupervisionProfile,
+};
+use crate::{
+    Configuration, Error, Harness, HarnessBinding, HarnessDeliveryAdapter, HarnessIdentifier,
+    HarnessKind, HarnessLifecycle, HarnessState, HarnessTerminalBinding, HarnessTerminalEndpoint,
+    PiRpcProcessConfiguration, PiRpcSession, ReadState, Result, SetHarnessLifecycle,
+};
+
+/// The type-level selector for harness's emitted daemon. It carries no runtime
+/// data — it is the marker the emitted `DaemonCommand<HarnessProcessDaemon>` and
+/// the generated runtime dispatch on, selecting harness's `Configuration` /
+/// `Engine` / `Error` types through the `ComponentDaemon` associated types.
 #[derive(Debug)]
-pub struct HarnessDaemon {
-    socket: PathBuf,
-    socket_mode: Option<SocketMode>,
-    harnesses: Vec<HarnessRuntimeConfiguration>,
-    supervision: Option<SupervisionListener>,
+pub struct HarnessProcessDaemon;
+
+/// Harness's daemon-facing engine: the configured harness instances and the
+/// supervision profile. The `component_decoded` runtime shares this engine as
+/// `&Self::Engine`; each instance and the supervision actor own their mutable
+/// state behind a kameo mailbox, so no component-internal lock is required. The
+/// actors start on first connection so `build_runtime` stays synchronous and
+/// they spawn inside the daemon's tokio runtime.
+pub struct HarnessEngine {
+    instance_configurations: Vec<HarnessRuntimeConfiguration>,
+    profile: SupervisionProfile,
+    instances: OnceCell<BoundHarnessInstances>,
+    supervision: OnceCell<ActorRef<SupervisionPhase>>,
 }
 
-impl HarnessDaemon {
+impl HarnessEngine {
     /// Canonical constructor — every production launch reads a typed
     /// `HarnessDaemonConfiguration` from the daemon's binary rkyv startup file
     /// and hands the decoded record here.
     pub fn from_configuration(configuration: HarnessDaemonConfiguration) -> Self {
-        let supervision = SupervisionListener::new(
-            SupervisionProfile::harness(),
-            PathBuf::from(configuration.supervision_socket_path.as_str()),
-            SupervisionSocketMode::from_octal(configuration.supervision_socket_mode.into_u32()),
-        );
         Self {
-            socket: PathBuf::from(configuration.harness_socket_path.as_str()),
-            socket_mode: Some(SocketMode::from_octal(
-                configuration.harness_socket_mode.into_u32(),
-            )),
-            harnesses: configuration
+            instance_configurations: configuration
                 .harnesses
                 .into_iter()
                 .map(HarnessRuntimeConfiguration::from_contract)
                 .collect(),
-            supervision: Some(supervision),
+            profile: SupervisionProfile::harness(),
+            instances: OnceCell::new(),
+            supervision: OnceCell::new(),
         }
     }
 
-    pub fn from_socket(socket: impl Into<PathBuf>) -> Self {
-        Self {
-            socket: socket.into(),
-            socket_mode: None,
-            harnesses: vec![HarnessRuntimeConfiguration::new(
-                HarnessName::new("harness"),
-                HarnessKind::Fixture,
-            )],
-            supervision: None,
-        }
-    }
-
-    pub fn with_harness(mut self, harness: HarnessName) -> Self {
-        self.primary_harness_mut().harness = harness;
-        self
-    }
-
-    pub fn with_kind(mut self, kind: HarnessKind) -> Self {
-        self.primary_harness_mut().kind = kind;
-        self
-    }
-
-    pub fn with_socket_mode(mut self, socket_mode: SocketMode) -> Self {
-        self.socket_mode = Some(socket_mode);
-        self
-    }
-
-    pub fn with_terminal_socket(mut self, path: impl Into<PathBuf>) -> Self {
-        self.primary_harness_mut().terminal_endpoint =
-            Some(HarnessTerminalEndpoint::pty_socket(path));
-        self
-    }
-
-    pub fn with_pi_rpc_process(mut self, configuration: PiRpcProcessConfiguration) -> Self {
-        self.primary_harness_mut().pi_rpc_configuration = Some(configuration);
-        self
-    }
-
-    pub fn with_harnesses(mut self, harnesses: Vec<HarnessRuntimeConfiguration>) -> Self {
-        self.harnesses = harnesses;
-        self
-    }
-
-    pub fn socket(&self) -> &PathBuf {
-        &self.socket
-    }
-
-    pub fn harness(&self) -> &HarnessName {
-        &self
-            .harnesses
-            .first()
-            .expect("harness daemon has at least one harness configuration")
-            .harness
-    }
-
-    pub fn kind(&self) -> &HarnessKind {
-        &self
-            .harnesses
-            .first()
-            .expect("harness daemon has at least one harness configuration")
-            .kind
-    }
-
-    pub fn run(self) -> Result<()> {
-        let supervision = self.supervision.clone();
-        let bound = self.bind()?;
-        let _supervision = supervision.map(SupervisionListener::spawn).transpose()?;
-        eprintln!("harness-daemon socket={}", bound.socket.display());
-        bound.serve_forever()
-    }
-
-    pub fn bind(self) -> Result<BoundHarnessDaemon> {
-        if let Some(parent) = self.socket.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let _ = std::fs::remove_file(&self.socket);
-        let listener = UnixListener::bind(&self.socket)?;
-        if let Some(socket_mode) = self.socket_mode {
-            std::fs::set_permissions(
-                &self.socket,
-                std::fs::Permissions::from_mode(socket_mode.as_octal()),
-            )?;
-        }
-        let runtime = tokio::runtime::Runtime::new()?;
-        let instances = runtime.block_on(BoundHarnessInstances::start(self.harnesses))?;
-        Ok(BoundHarnessDaemon {
-            socket: self.socket,
-            runtime,
-            listener,
-            instances,
-        })
-    }
-
-    pub fn serve_one(self) -> Result<HarnessEvent> {
-        self.bind()?.serve_one()
-    }
-
-    async fn stop_harness(reference: ActorRef<Harness>) -> Result<()> {
-        reference
-            .stop_gracefully()
+    async fn instances(&self) -> Result<&BoundHarnessInstances> {
+        self.instances
+            .get_or_try_init(|| BoundHarnessInstances::start(self.instance_configurations.clone()))
             .await
-            .map_err(|error| Error::ActorCall(error.to_string()))?;
-        reference.wait_for_shutdown().await;
-        Ok(())
     }
 
-    fn handle_connection(
-        runtime: &tokio::runtime::Runtime,
-        instances: &mut BoundHarnessInstances,
-        stream: UnixStream,
-    ) -> Result<HarnessEvent> {
-        let mut connection = HarnessConnection::from_stream(stream);
-        let request = connection.read_signal_request()?;
-        let event = match instances
-            .instance_mut(&HarnessRequestHandler::request_harness(&request.request))
-        {
-            Some(instance) => runtime.block_on(async {
-                HarnessRequestHandler::new(instance.harness.clone())
-                    .event_for_request(request.request, instance.delivery_adapter.as_mut())
-                    .await
-            })?,
-            None => Self::unavailable_event(request.request),
-        };
-        connection.write_signal_event(request.exchange, event.clone())?;
-        Ok(event)
+    async fn supervision(&self) -> &ActorRef<SupervisionPhase> {
+        self.supervision
+            .get_or_init(|| SupervisionPhase::start(self.profile.clone()))
+            .await
+    }
+
+    /// Serve one ordinary working connection: decode a `signal-harness`
+    /// `HarnessFrame` request off the length-prefixed envelope, route it to the
+    /// addressed harness instance, and write the typed event frame back.
+    async fn handle_working_connection(&self, connection: &mut AcceptedConnection) -> Result<()> {
+        let body = LengthPrefixedCodec::default()
+            .read_body_async(connection.stream_mut())
+            .await?
+            .into_bytes();
+        let received = ReceivedHarnessRequest::decode(&body)?;
+        let event = self.event_for_request(received.request).await?;
+        WorkingHarnessEvent::new(received.exchange, event)
+            .write(connection.stream_mut())
+            .await
+    }
+
+    async fn event_for_request(&self, request: HarnessRequest) -> Result<HarnessEvent> {
+        let harness = HarnessRequestHandler::request_harness(&request);
+        match self.instances().await?.instance(&harness) {
+            Some(instance) => instance
+                .ask(HandleHarnessRequest { request })
+                .await
+                .map_err(|error| Error::ActorCall(error.to_string())),
+            None => Ok(Self::unavailable_event(request)),
+        }
     }
 
     fn unavailable_event(request: HarnessRequest) -> HarnessEvent {
@@ -203,13 +140,70 @@ impl HarnessDaemon {
         }
     }
 
-    fn primary_harness_mut(&mut self) -> &mut HarnessRuntimeConfiguration {
-        self.harnesses
-            .first_mut()
-            .expect("harness daemon has at least one harness configuration")
+    /// Serve one owner-only supervision (meta) connection: decode an
+    /// engine-management `Frame` request and drive the supervision actor. The
+    /// manager binds this socket to announce, query readiness/health, and stop
+    /// the component.
+    async fn handle_meta_connection(&self, connection: &mut AcceptedConnection) -> Result<()> {
+        let body = LengthPrefixedCodec::default()
+            .read_body_async(connection.stream_mut())
+            .await?
+            .into_bytes();
+        let received = ReceivedSupervisionRequest::decode(&body)?;
+        let reply = self
+            .supervision()
+            .await
+            .ask(HandleSupervisionRequest {
+                request: received.request,
+            })
+            .await
+            .map_err(|error| Error::ActorCall(error.to_string()))?;
+        WorkingSupervisionReply::new(received.exchange, reply.reply)
+            .write(connection.stream_mut())
+            .await
     }
 }
 
+impl ComponentDaemon for HarnessProcessDaemon {
+    type Configuration = Configuration;
+    type ConfigurationError = Error;
+    type Engine = HarnessEngine;
+    type Error = Error;
+
+    const PROCESS_NAME: &'static str = "harness-daemon";
+
+    fn load_configuration(
+        path: &std::path::Path,
+    ) -> std::result::Result<Self::Configuration, Self::ConfigurationError> {
+        Configuration::from_binary_path(path)
+    }
+
+    fn build_runtime(
+        configuration: &Self::Configuration,
+    ) -> std::result::Result<Self::Engine, Self::Error> {
+        Ok(HarnessEngine::from_configuration(
+            configuration.raw().clone(),
+        ))
+    }
+
+    async fn handle_working_connection(
+        engine: &Self::Engine,
+        mut connection: AcceptedConnection,
+    ) -> Result<()> {
+        engine.handle_working_connection(&mut connection).await
+    }
+
+    async fn handle_meta_connection(
+        engine: &Self::Engine,
+        mut connection: AcceptedConnection,
+    ) -> Result<()> {
+        engine.handle_meta_connection(&mut connection).await
+    }
+}
+
+/// One harness instance's binding plus the optional delivery transport it was
+/// configured with. The bound instance turns this into a running `Harness`
+/// actor and its delivery adapter.
 #[derive(Debug, Clone)]
 pub struct HarnessRuntimeConfiguration {
     harness: HarnessName,
@@ -307,64 +301,11 @@ impl HarnessRuntimeConfiguration {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SocketMode(u32);
-
-impl SocketMode {
-    pub const fn from_octal(value: u32) -> Self {
-        Self(value)
-    }
-
-    pub const fn as_octal(self) -> u32 {
-        self.0
-    }
-}
-
-pub struct BoundHarnessDaemon {
-    socket: PathBuf,
-    runtime: tokio::runtime::Runtime,
-    listener: UnixListener,
-    instances: BoundHarnessInstances,
-}
-
-impl BoundHarnessDaemon {
-    pub fn socket(&self) -> &PathBuf {
-        &self.socket
-    }
-
-    pub fn serve_one(self) -> Result<HarnessEvent> {
-        let mut events = self.serve_requests(1)?;
-        Ok(events
-            .pop()
-            .expect("serve_requests(1) returns one harness event"))
-    }
-
-    pub fn serve_requests(mut self, count: usize) -> Result<Vec<HarnessEvent>> {
-        let mut events = Vec::with_capacity(count);
-        for _ in 0..count {
-            let (stream, _address) = self.listener.accept()?;
-            events.push(HarnessDaemon::handle_connection(
-                &self.runtime,
-                &mut self.instances,
-                stream,
-            )?);
-        }
-        self.runtime.block_on(self.instances.stop_all())?;
-        let _ = std::fs::remove_file(&self.socket);
-        Ok(events)
-    }
-
-    pub fn serve_forever(mut self) -> Result<()> {
-        for stream in self.listener.incoming() {
-            let stream = stream?;
-            let _ = HarnessDaemon::handle_connection(&self.runtime, &mut self.instances, stream)?;
-        }
-        Ok(())
-    }
-}
-
+/// The set of running harness instance actors keyed by name. Each instance
+/// actor owns its `Harness` lifecycle ref and its delivery adapter, so request
+/// dispatch is a typed `ask` against the instance mailbox — no shared lock.
 pub struct BoundHarnessInstances {
-    by_name: HashMap<HarnessName, BoundHarnessInstance>,
+    by_name: HashMap<HarnessName, ActorRef<HarnessInstance>>,
 }
 
 impl BoundHarnessInstances {
@@ -373,66 +314,81 @@ impl BoundHarnessInstances {
         for configuration in configurations {
             let harness = configuration.start_harness().await?;
             let delivery_adapter = configuration.delivery_adapter()?;
-            by_name.insert(
-                configuration.harness().clone(),
-                BoundHarnessInstance {
-                    harness,
-                    delivery_adapter,
-                },
-            );
+            let instance = HarnessInstance::start(harness, delivery_adapter).await;
+            by_name.insert(configuration.harness().clone(), instance);
         }
         Ok(Self { by_name })
     }
 
-    fn instance_mut(&mut self, harness: &HarnessName) -> Option<&mut BoundHarnessInstance> {
-        self.by_name.get_mut(harness)
-    }
-
-    async fn stop_all(&mut self) -> Result<()> {
-        let references = self
-            .by_name
-            .drain()
-            .map(|(_harness, instance)| instance.harness)
-            .collect::<Vec<_>>();
-        for reference in references {
-            HarnessDaemon::stop_harness(reference).await?;
-        }
-        Ok(())
+    fn instance(&self, harness: &HarnessName) -> Option<&ActorRef<HarnessInstance>> {
+        self.by_name.get(harness)
     }
 }
 
-pub struct BoundHarnessInstance {
+/// One harness instance's actor. It owns the lifecycle `Harness` actor ref and
+/// the mutable delivery adapter; its mailbox serialises every request against
+/// that delivery state, so the shared engine needs no component-internal lock.
+pub struct HarnessInstance {
     harness: ActorRef<Harness>,
     delivery_adapter: Option<HarnessDeliveryAdapter>,
 }
 
-pub struct HarnessConnection {
-    stream: BufReader<UnixStream>,
-    signal: HarnessFrameCodec,
-}
-
-impl HarnessConnection {
-    pub fn from_stream(stream: UnixStream) -> Self {
+impl HarnessInstance {
+    fn new(harness: ActorRef<Harness>, delivery_adapter: Option<HarnessDeliveryAdapter>) -> Self {
         Self {
-            stream: BufReader::new(stream),
-            signal: HarnessFrameCodec::default(),
+            harness,
+            delivery_adapter,
         }
     }
 
-    pub fn read_signal_request(&mut self) -> Result<ReceivedHarnessRequest> {
-        self.signal.read_request(&mut self.stream)
+    async fn start(
+        harness: ActorRef<Harness>,
+        delivery_adapter: Option<HarnessDeliveryAdapter>,
+    ) -> ActorRef<Self> {
+        let reference = Self::spawn(Self::new(harness, delivery_adapter));
+        reference.wait_for_startup().await;
+        reference
     }
 
-    pub fn write_signal_event(
-        &mut self,
-        exchange: ExchangeIdentifier,
-        event: HarnessEvent,
-    ) -> Result<()> {
-        let stream = self.stream.get_mut();
-        self.signal.write_event(stream, exchange, event)
+    async fn event_for_request(&mut self, request: HarnessRequest) -> Result<HarnessEvent> {
+        HarnessRequestHandler::new(self.harness.clone())
+            .event_for_request(request, self.delivery_adapter.as_mut())
+            .await
     }
 }
 
+impl Actor for HarnessInstance {
+    type Args = Self;
+    type Error = Infallible;
+
+    async fn on_start(
+        instance: Self::Args,
+        _actor_reference: ActorRef<Self>,
+    ) -> std::result::Result<Self, Self::Error> {
+        Ok(instance)
+    }
+}
+
+/// Drive one harness request through the addressed instance, returning the
+/// typed harness event. The instance mailbox serialises deliveries.
+#[derive(Debug)]
+pub struct HandleHarnessRequest {
+    pub request: HarnessRequest,
+}
+
+impl Message<HandleHarnessRequest> for HarnessInstance {
+    type Reply = Result<HarnessEvent>;
+
+    async fn handle(
+        &mut self,
+        message: HandleHarnessRequest,
+        _context: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.event_for_request(message.request).await
+    }
+}
+
+/// One decoded ordinary harness request plus its exchange identifier.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReceivedHarnessRequest {
     exchange: ExchangeIdentifier,
@@ -440,8 +396,25 @@ pub struct ReceivedHarnessRequest {
 }
 
 impl ReceivedHarnessRequest {
-    pub fn exchange(&self) -> &ExchangeIdentifier {
-        &self.exchange
+    pub fn decode(body: &[u8]) -> Result<Self> {
+        match HarnessFrame::decode(body)?.into_body() {
+            FrameBody::Request { exchange, request } => {
+                let (request, tail) = request.payloads.into_head_and_tail();
+                if !tail.is_empty() {
+                    return Err(Error::UnexpectedSignalFrame {
+                        got: format!("expected one harness payload, got {}", tail.len() + 1),
+                    });
+                }
+                Ok(Self { exchange, request })
+            }
+            other => Err(Error::UnexpectedSignalFrame {
+                got: format!("{other:?}"),
+            }),
+        }
+    }
+
+    pub fn exchange(&self) -> ExchangeIdentifier {
+        self.exchange
     }
 
     pub fn request(&self) -> &HarnessRequest {
@@ -449,69 +422,59 @@ impl ReceivedHarnessRequest {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct HarnessFrameCodec {
-    maximum_frame_bytes: usize,
+/// One ordinary harness event, framed and written back to the caller.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkingHarnessEvent {
+    exchange: ExchangeIdentifier,
+    event: HarnessEvent,
 }
 
-impl HarnessFrameCodec {
-    pub const fn new(maximum_frame_bytes: usize) -> Self {
-        Self {
-            maximum_frame_bytes,
-        }
+impl WorkingHarnessEvent {
+    pub fn new(exchange: ExchangeIdentifier, event: HarnessEvent) -> Self {
+        Self { exchange, event }
     }
 
-    pub fn read_frame(&self, reader: &mut impl Read) -> Result<HarnessFrame> {
-        let mut prefix = [0_u8; 4];
-        reader.read_exact(&mut prefix)?;
-        let length = u32::from_be_bytes(prefix) as usize;
-        if length > self.maximum_frame_bytes {
-            return Err(Error::UnexpectedSignalFrame {
-                got: format!("frame length {length} exceeds {}", self.maximum_frame_bytes),
-            });
-        }
-        let mut bytes = Vec::with_capacity(4 + length);
-        bytes.extend_from_slice(&prefix);
-        bytes.resize(4 + length, 0);
-        reader.read_exact(&mut bytes[4..])?;
-        Ok(HarnessFrame::decode_length_prefixed(&bytes)?)
-    }
-
-    pub fn read_request(&self, reader: &mut impl Read) -> Result<ReceivedHarnessRequest> {
-        match self.read_frame(reader)?.into_body() {
-            FrameBody::Request { exchange, request } => Ok(ReceivedHarnessRequest {
-                exchange,
-                request: request.payloads().head().clone(),
-            }),
-            other => Err(Error::UnexpectedSignalFrame {
-                got: format!("{other:?}"),
-            }),
-        }
-    }
-
-    pub fn write_event(
-        &self,
-        writer: &mut impl Write,
-        exchange: ExchangeIdentifier,
-        event: HarnessEvent,
-    ) -> Result<()> {
+    async fn write(self, stream: &mut tokio::net::UnixStream) -> Result<()> {
         let frame = HarnessFrame::new(FrameBody::Reply {
-            exchange,
-            reply: Reply::committed(NonEmpty::single(SubReply::Ok(event))),
+            exchange: self.exchange,
+            reply: Reply::committed(NonEmpty::single(SubReply::Ok(self.event))),
         });
-        let bytes = frame.encode_length_prefixed()?;
-        writer.write_all(&bytes)?;
-        writer.flush()?;
+        LengthPrefixedCodec::default()
+            .write_body_async(stream, &LengthPrefixedFrameBody::new(frame.encode()?))
+            .await?;
+        stream.flush().await.map_err(FrameError::from)?;
         Ok(())
     }
 }
 
-impl Default for HarnessFrameCodec {
-    fn default() -> Self {
-        Self::new(1024 * 1024)
+/// One supervision reply, framed and written back to the manager.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkingSupervisionReply {
+    exchange: ExchangeIdentifier,
+    reply: signal_persona::Reply,
+}
+
+impl WorkingSupervisionReply {
+    pub fn new(exchange: ExchangeIdentifier, reply: signal_persona::Reply) -> Self {
+        Self { exchange, reply }
+    }
+
+    async fn write(self, stream: &mut tokio::net::UnixStream) -> Result<()> {
+        let frame = signal_persona::Frame::new(signal_persona::FrameBody::Reply {
+            exchange: self.exchange,
+            reply: Reply::committed(NonEmpty::single(SubReply::Ok(self.reply))),
+        });
+        LengthPrefixedCodec::default()
+            .write_body_async(stream, &LengthPrefixedFrameBody::new(frame.encode()?))
+            .await?;
+        stream.flush().await.map_err(FrameError::from)?;
+        Ok(())
     }
 }
 
+/// Turns one decoded harness request into the harness event the daemon replies
+/// with, driving the addressed `Harness` lifecycle actor and the configured
+/// delivery adapter.
 #[derive(Debug, Clone)]
 pub struct HarnessRequestHandler {
     harness: ActorRef<Harness>,

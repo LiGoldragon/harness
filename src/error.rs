@@ -10,6 +10,9 @@ pub enum Error {
     #[error("signal frame: {0}")]
     SignalFrame(#[from] signal_frame::FrameError),
 
+    #[error("daemon transport frame: {0}")]
+    TransportFrame(#[from] triad_runtime::FrameError),
+
     #[error("actor call: {0}")]
     ActorCall(String),
 
