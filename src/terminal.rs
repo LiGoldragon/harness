@@ -42,7 +42,7 @@ impl HarnessTerminalBinding {
     }
 
     pub fn capture_request(&self) -> TerminalInputRoot {
-        TerminalInputRoot::TerminalCapture(TerminalCapture(self.terminal.clone()))
+        TerminalInputRoot::TerminalCapture(TerminalCapture::new(self.terminal.clone()))
     }
 }
 

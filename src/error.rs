@@ -27,6 +27,15 @@ pub enum Error {
     #[error("daemon argument: {0}")]
     Argument(#[from] triad_runtime::ArgumentError),
 
+    #[error("input file read failed at {path}: {source}")]
+    ReadNotaFile {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+
+    #[error("nota decode: {0}")]
+    Nota(#[from] nota_next::NotaDecodeError),
+
     #[error("failed to read binary daemon configuration {path}: {source}")]
     ConfigurationRead {
         path: PathBuf,

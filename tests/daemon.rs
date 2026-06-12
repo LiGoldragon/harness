@@ -21,6 +21,11 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use harness::HarnessDaemonConfigurationFile;
+use meta_signal_harness::{
+    MetaHarnessFrame, MetaHarnessFrameBody, MetaHarnessReply, MetaHarnessRequest,
+    RequestUnimplemented as MetaRequestUnimplemented,
+    UnimplementedReason as MetaUnimplementedReason,
+};
 use signal_frame::{
     ExchangeIdentifier, ExchangeLane, LaneSequence, Reply, Request, SessionEpoch, SubReply,
 };
@@ -126,7 +131,7 @@ impl TerminalAcceptanceSocket {
                 TerminalInputRoot::TerminalInput(input) => {
                     let bytes = input
                         .bytes
-                        .0
+                        .payload()
                         .iter()
                         .map(|byte| *byte as u8)
                         .collect::<Vec<u8>>();
@@ -136,7 +141,7 @@ impl TerminalAcceptanceSocket {
                         received_request.exchange,
                         TerminalOutput::TerminalInputAccepted(TerminalInputAccepted {
                             terminal: input.terminal,
-                            generation: TerminalGeneration(1),
+                            generation: TerminalGeneration::new(1),
                         }),
                     )
                     .expect("terminal socket writes Signal acceptance");
@@ -614,6 +619,33 @@ fn harness_daemon_returns_typed_unimplemented() {
 }
 
 #[test]
+fn harness_daemon_answers_meta_harness_relation_with_typed_unimplemented() {
+    let fixture = SocketFixture::new("meta-harness");
+    let supervision_socket = fixture.supervision_socket();
+    let configuration_path = fixture.root.join("harness-daemon.rkyv");
+    let configuration = DaemonConfigurationBuilder::new(&fixture)
+        .with_supervision_socket_mode(0o600)
+        .build(vec![fixture_instance("operator").build()]);
+    write_configuration(&configuration_path, configuration.clone());
+    let _daemon = SpawnedHarnessDaemon::spawn(&configuration_path);
+
+    wait_for_socket(&supervision_socket);
+
+    let mut stream =
+        UnixStream::connect(&supervision_socket).expect("meta-harness client connects");
+    write_meta_harness_request(&mut stream, MetaHarnessRequest::Configure(configuration));
+    let reply = read_meta_harness_reply(&mut stream);
+
+    assert_eq!(
+        reply,
+        MetaHarnessReply::RequestUnimplemented(MetaRequestUnimplemented {
+            operation: meta_signal_harness::OperationKind::Configure,
+            reason: MetaUnimplementedReason::NotBuiltYet,
+        })
+    );
+}
+
+#[test]
 fn harness_daemon_answers_component_supervision_relation() {
     let fixture = SocketFixture::new("component-supervision");
     let supervision_socket = fixture.supervision_socket();
@@ -795,6 +827,32 @@ fn read_working_event(stream: &mut UnixStream) -> HarnessEvent {
             Reply::Rejected { reason } => panic!("expected harness event reply, got {reason:?}"),
         },
         other => panic!("expected harness event reply, got {other:?}"),
+    }
+}
+
+fn write_meta_harness_request(stream: &mut UnixStream, request: MetaHarnessRequest) {
+    let frame = MetaHarnessFrame::new(MetaHarnessFrameBody::Request {
+        exchange: test_exchange(),
+        request: Request::from_payload(request),
+    });
+    write_length_prefixed(
+        stream,
+        &frame.encode().expect("meta-harness request encodes"),
+    );
+}
+
+fn read_meta_harness_reply(stream: &mut UnixStream) -> MetaHarnessReply {
+    let body = read_length_prefixed_frame(stream).expect("meta-harness reply reads");
+    let frame = MetaHarnessFrame::decode(&body).expect("meta-harness reply decodes");
+    match frame.into_body() {
+        MetaHarnessFrameBody::Reply { reply, .. } => match reply {
+            Reply::Accepted { per_operation, .. } => match per_operation.into_head() {
+                SubReply::Ok(payload) => payload,
+                other => panic!("expected ok meta-harness sub-reply, got {other:?}"),
+            },
+            Reply::Rejected { reason } => panic!("expected meta-harness reply, got {reason:?}"),
+        },
+        other => panic!("expected meta-harness reply, got {other:?}"),
     }
 }
 

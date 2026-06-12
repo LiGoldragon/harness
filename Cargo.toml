@@ -13,16 +13,26 @@ name = "harness"
 path = "src/lib.rs"
 
 [[bin]]
-name = "harness-daemon"
+name = "harness"
 path = "src/main.rs"
+
+[[bin]]
+name = "meta-harness"
+path = "src/bin/meta_harness.rs"
+
+[[bin]]
+name = "harness-daemon"
+path = "src/bin/harness_daemon.rs"
 
 [dependencies]
 kameo                   = { version = "0.20", default-features = false, features = ["macros", "tracing"] }
+meta-signal-harness     = { git = "https://github.com/LiGoldragon/meta-signal-harness.git", branch = "main" }
+nota-next               = { git = "https://github.com/LiGoldragon/nota-next.git", branch = "main" }
 rkyv                    = { version = "0.8", default-features = false, features = ["std", "bytecheck", "little_endian", "pointer_width_32", "unaligned"] }
 signal-frame           = { git = "https://github.com/LiGoldragon/signal-frame.git", branch = "main" }
-signal-persona = { git = "https://github.com/LiGoldragon/signal-persona.git", branch = "main" }
-signal-harness = { git = "https://github.com/LiGoldragon/signal-harness.git", branch = "main" }
-signal-terminal = { git = "https://github.com/LiGoldragon/signal-terminal.git", branch = "main" }
+signal-harness         = { git = "https://github.com/LiGoldragon/signal-harness.git", branch = "main" }
+signal-persona         = { git = "https://github.com/LiGoldragon/signal-persona.git", branch = "main" }
+signal-terminal        = { git = "https://github.com/LiGoldragon/signal-terminal.git", branch = "main" }
 serde_json              = "1"
 thiserror               = "2"
 tokio                   = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time"] }
@@ -37,6 +47,8 @@ unused = { level = "warn", priority = -1 }
 dead_code = "warn"
 
 [dev-dependencies]
-message       = { git = "https://github.com/LiGoldragon/message.git", branch = "main" }
+message       = { git = "https://github.com/LiGoldragon/message.git", branch = "main", features = [
+    "nota-text",
+] }
 signal-router = { git = "https://github.com/LiGoldragon/signal-router.git", branch = "main" }
 tempfile      = "3"

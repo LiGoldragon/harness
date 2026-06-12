@@ -12,6 +12,11 @@ Rules for work here:
 - Use the Pi RPC/JSONL adapter for Pi programmatic intake; do not force Pi
   through terminal injection when the daemon has a typed Pi adapter
   configuration.
+- Keep the component triad surface split: `harness` is the ordinary
+  `signal-harness` CLI, `meta-harness` is the `meta-signal-harness`
+  policy CLI, and `harness-daemon` is the managed runtime process.
+- The owner-only daemon socket recognizes `meta-signal-harness` before
+  falling back to Persona supervision while both management surfaces exist.
 - One `harness-daemon` component process may own multiple harness instances.
   Add per-harness boundaries as `HarnessInstanceConfiguration` records and
   in-process actors/adapters; do not spawn one daemon process per harness

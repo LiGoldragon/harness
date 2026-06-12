@@ -55,8 +55,11 @@ flowchart LR
 
 `harness` exposes:
 
-- a `harness-daemon` skeleton binary for the first-stack engine
-  supervision witness;
+- `harness`, the ordinary thin CLI client for `signal-harness`;
+- `meta-harness`, the owner/meta thin CLI client for
+  `meta-signal-harness`;
+- `harness-daemon`, the managed runtime daemon that binds the working
+  and owner-only meta sockets from a single binary startup record;
 - harness identity records;
 - lifecycle state;
 - transcript events;
@@ -76,8 +79,12 @@ stream.
 
 ## 1.5 · Lifecycle FSM and supervision-relation reception
 
-The harness daemon answers `signal-engine-management::Operation` from a
-canonical `SupervisionPhase` Kameo actor. The daemon receives exactly one
+The harness daemon first decodes owner-only meta traffic as
+`meta-signal-harness`. Its current `Configure` implementation is not built
+yet, so it replies with typed `MetaHarnessReply::RequestUnimplemented`.
+If a frame is not the meta-harness contract, the same socket falls back to
+Persona supervision and answers from a canonical `SupervisionPhase` Kameo
+actor. The daemon receives exactly one
 startup argument: a `signal_harness::HarnessDaemonConfiguration`
 record supplied as a signal-encoded/rkyv file path. Inline NOTA and `.nota`
 startup files are rejected before daemon-specific decoding. That record carries
@@ -205,6 +212,12 @@ This repo does not own:
 - Adapter capabilities are explicit typed records, not stringly flags.
 - Fixture-only terminal endpoints cannot claim real terminal delivery.
 - The daemon accepts length-prefixed `signal-harness` frames.
+- The `harness` CLI sends one ordinary `signal-harness` request and prints
+  one typed NOTA reply.
+- The `meta-harness` CLI sends one privileged `meta-signal-harness` request
+  and prints one typed NOTA reply.
+- The daemon's meta socket recognizes `meta-signal-harness` before falling
+  back to Persona supervision.
 - The daemon applies the managed spawn-envelope socket mode to `harness.sock`
   before accepting client traffic.
 - The daemon turns `MessageDelivery` into terminal input only when a typed
@@ -246,13 +259,19 @@ This repo does not own:
 ## Code Map
 
 ```text
-src/harness.rs    harness identity records
-src/daemon.rs     length-prefixed Signal daemon skeleton
-src/runtime.rs    Kameo lifecycle and transcript state owner
-src/terminal.rs   terminal delivery adapter records
-src/pi.rs         Pi RPC/JSONL process adapter
-src/transcript.rs transcript event records
-tests/            harness smoke and actor-runtime constraint tests
+src/main.rs               ordinary signal-harness CLI
+src/bin/meta_harness.rs   meta-signal-harness CLI
+src/bin/harness_daemon.rs managed daemon entrypoint
+src/client.rs             ordinary CLI client transport
+src/meta.rs               meta CLI client transport
+src/configuration.rs      BindingSurface over HarnessDaemonConfiguration
+src/daemon.rs             length-prefixed Signal daemon hooks
+src/harness.rs            harness identity records
+src/runtime.rs            Kameo lifecycle and transcript state owner
+src/terminal.rs           terminal delivery adapter records
+src/pi.rs                 Pi RPC/JSONL process adapter
+src/transcript.rs         transcript event records
+tests/                    harness smoke, daemon, CLI, and actor-runtime tests
 ```
 
 ## Constraint Tests
@@ -268,8 +287,8 @@ tests/            harness smoke and actor-runtime constraint tests
 | Harness daemon accepts `HarnessKind::Codex` from a single binary configuration argument. | `cargo test --test daemon harness_daemon_accepts_codex_kind_from_single_binary_configuration_argument` |
 | Harness daemon rejects inline NOTA and `.nota` configuration arguments. | `cargo test --test daemon harness_daemon_configuration_rejects` |
 | Harness daemon rejects multiple configuration arguments before daemon construction. | `nix flake check .#harness-daemon-configuration-rejects-multiple-arguments` |
-| Harness daemon applies the managed spawn-envelope socket mode. | `nix flake check .#harness-daemon-applies-spawn-envelope-socket-mode` |
-| Harness daemon flows distinctive socket modes through to both the domain and supervision sockets. | `nix flake check .#harness-daemon-applies-distinctive-spawn-envelope-socket-modes` |
+| Harness daemon applies the configured working socket mode. | `nix flake check .#harness-daemon-binds-working-socket-with-configured-mode` |
+| Harness daemon uses the configured working socket mode while keeping the owner-only meta socket at daemon-shape mode. | `nix flake check .#harness-daemon-applies-configured-working-socket-mode-and-owner-only-supervision` |
 | Harness daemon delivers message bytes to a configured terminal endpoint. | `nix flake check .#harness-daemon-delivers-message-to-terminal-endpoint` |
 | Harness daemon dispatches two harness instances inside one process by `HarnessName`. | `cargo test --test daemon harness_daemon_dispatches_two_harness_instances_inside_one_process` |
 | Harness daemon delivers Pi-kind messages through the Pi RPC/JSONL adapter. | `cargo test --test daemon harness_daemon_delivers_message_to_pi_rpc_endpoint` |
@@ -277,6 +296,9 @@ tests/            harness smoke and actor-runtime constraint tests
 | Harness daemon rejects message delivery without a terminal endpoint. | `nix flake check .#harness-daemon-rejects-message-delivery-without-terminal-endpoint` |
 | Harness daemon answers status/readiness through its Signal boundary. | `nix flake check .#harness-daemon-answers-status-readiness` |
 | Harness daemon returns typed unimplemented for valid unfinished requests. | `nix flake check .#harness-daemon-returns-typed-unimplemented` |
+| Harness daemon recognizes the meta-harness policy contract before Persona supervision fallback. | `nix flake check .#harness-daemon-answers-meta-harness-relation` |
+| `harness` reaches the ordinary working socket and prints a typed reply. | `nix flake check .#harness-cli-reaches-working-socket` |
+| `meta-harness` reaches the owner/meta policy socket and prints a typed reply. | `nix flake check .#meta-harness-cli-reaches-policy-socket` |
 | Harness daemon opens a transcript subscription, returns a typed snapshot, and pushes typed deltas. | `nix flake check .#harness-daemon-pushes-transcript-deltas-after-subscribe` |
 | A subscriber receives the final `HarnessSubscriptionRetracted` ack carrying the same token before the stream ends. | `nix flake check .#harness-daemon-emits-final-subscription-retracted-ack` |
 | A slow subscriber does not stall transcript-delta delivery to a sibling subscription. | `nix flake check .#harness-daemon-slow-subscriber-does-not-block-siblings` |

@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use signal_harness::HarnessDaemonConfiguration;
-use triad_runtime::{DaemonConfiguration, SocketMode as RuntimeSocketMode};
+use triad_runtime::{BindingSurface, SocketMode as RuntimeSocketMode};
 
 use crate::error::{Error, Result};
 
@@ -9,7 +9,7 @@ use crate::error::{Error, Result};
 /// startup contract that the Persona manager encodes when it spawns
 /// `harness-daemon`. The contract `HarnessDaemonConfiguration` is the
 /// externally-consumed boundary; this type adds the cached `PathBuf`s the
-/// emitted daemon shell binds from through `triad_runtime::DaemonConfiguration`,
+/// emitted daemon shell binds from through `triad_runtime::BindingSurface`,
 /// and carries the decoded contract through to the engine.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Configuration {
@@ -43,7 +43,7 @@ impl Configuration {
             path: path.to_path_buf(),
             source,
         })?;
-        let raw = rkyv::from_bytes::<HarnessDaemonConfiguration, rkyv::rancor::Error>(&bytes)
+        let raw = HarnessDaemonConfiguration::from_rkyv_bytes(&bytes)
             .map_err(|_| Error::ConfigurationArchiveDecode)?;
         Ok(Self::from_raw(raw))
     }
@@ -65,7 +65,7 @@ impl Configuration {
     }
 }
 
-impl DaemonConfiguration for Configuration {
+impl BindingSurface for Configuration {
     fn socket_path(&self) -> &Path {
         &self.harness_socket_path
     }

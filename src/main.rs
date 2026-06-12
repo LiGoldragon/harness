@@ -1,6 +1,8 @@
-use harness::HarnessProcessDaemon;
-use harness::schema::daemon::DaemonEntry;
+use harness::HarnessCommandLine;
 
-fn main() -> std::process::ExitCode {
-    <HarnessProcessDaemon as DaemonEntry>::run_to_exit_code()
+fn main() {
+    if let Err(error) = HarnessCommandLine::from_env().run(std::io::stdout().lock()) {
+        eprintln!("harness: {error}");
+        std::process::exit(1);
+    }
 }

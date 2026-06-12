@@ -13,3 +13,8 @@ Harness identity is projected through typed read views. Full views keep
 identity, kind, and working directory; redacted views expose only the harness
 id; hidden views expose no incidental harness identity. These views are not
 runtime authorization gates.
+
+The component surface has two thin CLI clients and one daemon:
+`harness` sends ordinary `signal-harness` requests, `meta-harness` sends
+privileged `meta-signal-harness` policy requests, and `harness-daemon`
+serves the managed runtime sockets from a single binary startup record.

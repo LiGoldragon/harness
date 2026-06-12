@@ -8,9 +8,9 @@
 //! component owns the per-connection `HarnessFrame` decode), and the existing
 //! kameo actors (`Harness`, `TranscriptSubscriptionManager`) stay the engine.
 //!
-//! The owner-only meta listener carries the engine-management supervision
-//! protocol (the second socket the manager binds): `handle_meta_connection`
-//! decodes a `signal-persona` `Frame` and drives `SupervisionPhase`.
+//! The owner-only meta listener carries the canonical `meta-signal-harness`
+//! policy contract and falls back to the engine-management supervision
+//! protocol while the component manager still carries both surfaces.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -18,6 +18,10 @@ use std::path::PathBuf;
 use kameo::actor::{Actor, ActorRef, Spawn};
 use kameo::error::Infallible;
 use kameo::message::{Context, Message};
+use meta_signal_harness::{
+    MetaHarnessFrame, MetaHarnessFrameBody, MetaHarnessReply, MetaHarnessRequest,
+    RequestUnimplemented, UnimplementedReason,
+};
 use signal_frame::{ExchangeIdentifier, NonEmpty, Reply, SubReply};
 use signal_harness::{
     DeliveryCompleted, DeliveryFailed, DeliveryFailureReason, HarnessDaemonConfiguration,
@@ -140,15 +144,30 @@ impl HarnessEngine {
         }
     }
 
-    /// Serve one owner-only supervision (meta) connection: decode an
-    /// engine-management `Frame` request and drive the supervision actor. The
-    /// manager binds this socket to announce, query readiness/health, and stop
-    /// the component.
+    /// Serve one owner-only meta connection. The canonical meta contract is
+    /// `meta-signal-harness`; the older engine-management supervision protocol
+    /// still falls through here while the component manager carries both
+    /// surfaces during the daemon-shell migration.
     async fn handle_meta_connection(&self, connection: &mut AcceptedConnection) -> Result<()> {
         let body = LengthPrefixedCodec::default()
             .read_body_async(connection.stream_mut())
             .await?
             .into_bytes();
+        match ReceivedMetaHarnessRequest::decode(&body) {
+            Ok(received) => {
+                let reply = MetaHarnessReply::RequestUnimplemented(RequestUnimplemented {
+                    operation: received.request.kind(),
+                    reason: UnimplementedReason::NotBuiltYet,
+                });
+                return WorkingMetaHarnessReply::new(received.exchange, reply)
+                    .write(connection.stream_mut())
+                    .await;
+            }
+            Err(MetaHarnessDecode::NotMeta) => {}
+            Err(MetaHarnessDecode::UnexpectedFrame(got)) => {
+                return Err(Error::UnexpectedSignalFrame { got });
+            }
+        }
         let received = ReceivedSupervisionRequest::decode(&body)?;
         let reply = self
             .supervision()
@@ -198,6 +217,71 @@ impl ComponentDaemon for HarnessProcessDaemon {
         mut connection: AcceptedConnection,
     ) -> Result<()> {
         engine.handle_meta_connection(&mut connection).await
+    }
+}
+
+/// One decoded meta-harness request plus its exchange identifier.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReceivedMetaHarnessRequest {
+    exchange: ExchangeIdentifier,
+    request: MetaHarnessRequest,
+}
+
+impl ReceivedMetaHarnessRequest {
+    pub fn decode(body: &[u8]) -> std::result::Result<Self, MetaHarnessDecode> {
+        let frame = MetaHarnessFrame::decode(body).map_err(|_| MetaHarnessDecode::NotMeta)?;
+        match frame.into_body() {
+            MetaHarnessFrameBody::Request { exchange, request } => {
+                let (request, tail) = request.payloads.into_head_and_tail();
+                if !tail.is_empty() {
+                    return Err(MetaHarnessDecode::UnexpectedFrame(format!(
+                        "expected one meta-harness payload, got {}",
+                        tail.len() + 1
+                    )));
+                }
+                Ok(Self { exchange, request })
+            }
+            other => Err(MetaHarnessDecode::UnexpectedFrame(format!("{other:?}"))),
+        }
+    }
+
+    pub fn exchange(&self) -> ExchangeIdentifier {
+        self.exchange
+    }
+
+    pub fn request(&self) -> &MetaHarnessRequest {
+        &self.request
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MetaHarnessDecode {
+    NotMeta,
+    UnexpectedFrame(String),
+}
+
+/// One meta-harness reply, framed and written back to the owner client.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkingMetaHarnessReply {
+    exchange: ExchangeIdentifier,
+    reply: MetaHarnessReply,
+}
+
+impl WorkingMetaHarnessReply {
+    pub fn new(exchange: ExchangeIdentifier, reply: MetaHarnessReply) -> Self {
+        Self { exchange, reply }
+    }
+
+    async fn write(self, stream: &mut tokio::net::UnixStream) -> Result<()> {
+        let frame = MetaHarnessFrame::new(MetaHarnessFrameBody::Reply {
+            exchange: self.exchange,
+            reply: Reply::committed(NonEmpty::single(SubReply::Ok(self.reply))),
+        });
+        LengthPrefixedCodec::default()
+            .write_body_async(stream, &LengthPrefixedFrameBody::new(frame.encode()?))
+            .await?;
+        stream.flush().await.map_err(FrameError::from)?;
+        Ok(())
     }
 }
 

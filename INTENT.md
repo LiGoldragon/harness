@@ -45,11 +45,17 @@ endpoint may complete without sending bytes to terminal transport; production te
 delivery counts an input as delivered only after the terminal accepts the bytes, and Pi
 RPC delivery counts a message as delivered only after the RPC sidecar accepts the command.
 The daemon reports typed `DeliveryFailed` when no adapter endpoint is available. The
-daemon accepts only length-prefixed `signal-harness` frames. The message-routing e2e
-witness must exercise a real request and reply path through real `message-daemon`,
-`router-daemon`, and one `harness-daemon` process that owns both harness instances
-before it can be described as a round-trip daemon witness; a single routed delivery into
-an acceptance socket is only a one-way routing witness. When
-durable harness history is needed, the harness actor opens its own `harness.sema` through
-a harness-owned Sema layer backed by `sema-engine` and sequences its own writes — no shared
-cross-component database, and no write ownership over any other component's Sema layer.
+daemon accepts only length-prefixed `signal-harness` frames on its working socket.
+Every component exposes its working signal and meta policy contracts as two thin CLI
+clients. For `harness`, `harness` is the ordinary `signal-harness` client and
+`meta-harness` is the `meta-signal-harness` policy client. The daemon's owner-only
+meta socket recognizes `meta-signal-harness` first, then falls back to Persona
+supervision while the component manager still carries both surfaces. The
+message-routing e2e witness must exercise a real request and reply path through real
+`message-daemon`, `router-daemon`, and one `harness-daemon` process that owns both
+harness instances before it can be described as a round-trip daemon witness; a single
+routed delivery into an acceptance socket is only a one-way routing witness. When
+durable harness history is needed, the harness actor opens its own `harness.sema`
+through a harness-owned Sema layer backed by `sema-engine` and sequences its own writes
+— no shared cross-component database, and no write ownership over any other component's
+Sema layer.

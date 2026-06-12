@@ -1,9 +1,12 @@
+pub mod cli_argument;
+pub mod client;
 pub mod command;
 pub mod configuration;
 pub mod daemon;
 pub mod delivery;
 pub mod error;
 pub mod harness;
+pub mod meta;
 pub mod pi;
 pub mod runtime;
 pub mod schema;
@@ -12,6 +15,8 @@ pub mod supervision;
 pub mod terminal;
 pub mod transcript;
 
+pub use cli_argument::NotaCommandText;
+pub use client::{HarnessClient, HarnessCommandEnvironment, HarnessCommandLine, HarnessEndpoint};
 pub use command::HarnessDaemonConfigurationFile;
 pub use configuration::Configuration;
 pub use daemon::{
@@ -23,6 +28,9 @@ pub use delivery::{HarnessDeliveryAdapter, HarnessDeliveryReceipt};
 pub use error::{Error, Result};
 pub use harness::{
     HarnessBinding, HarnessIdentifier, HarnessIdentityProjection, HarnessIdentityView, HarnessKind,
+};
+pub use meta::{
+    MetaHarnessClient, MetaHarnessCommandEnvironment, MetaHarnessCommandLine, MetaHarnessEndpoint,
 };
 pub use pi::{PiRpcDeliveryCommand, PiRpcDeliveryReceipt, PiRpcProcessConfiguration, PiRpcSession};
 pub use runtime::{
