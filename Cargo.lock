@@ -392,7 +392,7 @@ checksum = "6b947ae49db0d222b1dbc6b113ce7248a3fc3a6ca21b696717bfc000ba4484d8"
 [[package]]
 name = "message"
 version = "0.5.0"
-source = "git+https://github.com/LiGoldragon/message.git?branch=main#13c6abc6ef433700fa2c808745113435b1339054"
+source = "git+https://github.com/LiGoldragon/message.git?branch=main#2de50b7eed606912475e6ebd9ec58801b7df4a43"
 dependencies = [
  "meta-signal-message",
  "nota-next",
@@ -408,7 +408,7 @@ dependencies = [
 [[package]]
 name = "meta-signal-harness"
 version = "0.1.0"
-source = "git+https://github.com/LiGoldragon/meta-signal-harness.git?branch=main#a59b0d0d1036f0780479af60420fff9ca95fc6a2"
+source = "git+https://github.com/LiGoldragon/meta-signal-harness.git?branch=main#f3491a5c86470e9c312ab835509552f711322379"
 dependencies = [
  "nota-next",
  "rkyv",
@@ -420,10 +420,11 @@ dependencies = [
 [[package]]
 name = "meta-signal-message"
 version = "0.1.0"
-source = "git+https://github.com/LiGoldragon/meta-signal-message.git?branch=main#a7c810e56dcd9b5fea28995f9adfe825d15755a6"
+source = "git+https://github.com/LiGoldragon/meta-signal-message.git?branch=main#f9b0863c0ccfd36d4030654df37b9659e5eef8fa"
 dependencies = [
  "nota-next",
  "rkyv",
+ "schema-rust-next",
  "signal-frame",
  "signal-message",
  "thiserror",
@@ -631,7 +632,7 @@ dependencies = [
 [[package]]
 name = "schema-rust-next"
 version = "0.5.3"
-source = "git+https://github.com/LiGoldragon/schema-rust-next.git?branch=main#7c15bc3fa3d07f4710acca16f14eef1aa68b02dd"
+source = "git+https://github.com/LiGoldragon/schema-rust-next.git?branch=main#00763d676d63395d45b5f8a81dbf9a2287574ca9"
 dependencies = [
  "prettyplease",
  "proc-macro2",
@@ -721,7 +722,7 @@ dependencies = [
 [[package]]
 name = "signal-harness"
 version = "0.1.0"
-source = "git+https://github.com/LiGoldragon/signal-harness.git?branch=main#dad44fef0c3ef3cd3175facf9615572640cf2c23"
+source = "git+https://github.com/LiGoldragon/signal-harness.git?branch=main#6c68e22097179bf306078001dc4e4f3e4bd44529"
 dependencies = [
  "nota-next",
  "rkyv",
@@ -755,7 +756,7 @@ dependencies = [
 [[package]]
 name = "signal-router"
 version = "0.2.0"
-source = "git+https://github.com/LiGoldragon/signal-router.git?branch=main#5ab83f0e8e180d9471a50a9a700095ed41136dfd"
+source = "git+https://github.com/LiGoldragon/signal-router.git?branch=main#023a7f835edacf847894e7f3fde314bf217d0923"
 dependencies = [
  "rkyv",
  "schema-rust-next",
