@@ -21,8 +21,8 @@ pub struct Configuration {
 
 impl Configuration {
     pub fn from_raw(raw: HarnessDaemonConfiguration) -> Self {
-        let harness_socket_path = PathBuf::from(raw.harness_socket_path.as_str());
-        let supervision_socket_path = PathBuf::from(raw.supervision_socket_path.as_str());
+        let harness_socket_path = PathBuf::from(raw.domain_socket_path.as_ref());
+        let supervision_socket_path = PathBuf::from(raw.engine_management_socket_path.as_ref());
         let state_dir = harness_socket_path
             .parent()
             .map(Path::to_path_buf)
@@ -57,11 +57,11 @@ impl Configuration {
     }
 
     fn harness_socket_mode(&self) -> RuntimeSocketMode {
-        RuntimeSocketMode::new(self.raw.harness_socket_mode.into_u32())
+        RuntimeSocketMode::new(*self.raw.domain_socket_mode.payload() as u32)
     }
 
     fn supervision_socket_mode(&self) -> RuntimeSocketMode {
-        RuntimeSocketMode::new(self.raw.supervision_socket_mode.into_u32())
+        RuntimeSocketMode::new(*self.raw.engine_management_socket_mode.payload() as u32)
     }
 }
 

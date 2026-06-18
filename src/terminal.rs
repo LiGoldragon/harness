@@ -4,8 +4,9 @@ use std::path::{Path, PathBuf};
 
 use signal_frame::{ExchangeIdentifier, ExchangeLane, LaneSequence, Reply, SessionEpoch, SubReply};
 use signal_terminal::{
-    Frame as TerminalFrame, FrameBody as TerminalFrameBody, Input as TerminalInputRoot,
-    Output as TerminalOutput, TerminalCapture, TerminalInput, TerminalInputBytes, TerminalName,
+    Frame as TerminalFrame, FrameBody as TerminalFrameBody, Input as TerminalInputRoot, InputBytes,
+    Output as TerminalOutput, Terminal, TerminalCapture, TerminalInput, TerminalInputBytes,
+    TerminalName,
 };
 
 use crate::{HarnessIdentifier, Result};
@@ -36,13 +37,17 @@ impl HarnessTerminalBinding {
 
     pub fn input_request(&self, bytes: Vec<u8>) -> TerminalInputRoot {
         TerminalInputRoot::TerminalInput(TerminalInput {
-            terminal: self.terminal.clone(),
-            bytes: TerminalInputBytes::new(bytes.into_iter().map(u64::from).collect()),
+            terminal: Terminal::new(self.terminal.clone()),
+            input_bytes: InputBytes::new(TerminalInputBytes::new(
+                bytes.into_iter().map(u64::from).collect(),
+            )),
         })
     }
 
     pub fn capture_request(&self) -> TerminalInputRoot {
-        TerminalInputRoot::TerminalCapture(TerminalCapture::new(self.terminal.clone()))
+        TerminalInputRoot::TerminalCapture(TerminalCapture::new(Terminal::new(
+            self.terminal.clone(),
+        )))
     }
 }
 

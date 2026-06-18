@@ -35,17 +35,17 @@ use signal_harness::{
     HarnessKind as ContractHarnessKind, HarnessName, HarnessOperationKind, HarnessReadiness,
     HarnessRequest, HarnessRequestUnimplemented, HarnessStatus, HarnessStatusQuery,
     HarnessUnimplementedReason, InteractionPrompt, MessageBody, MessageDelivery, MessageSender,
-    MessageSlot,
+    MessageSlot, PiRpcCommandPath, PiRpcSessionDirectoryPath, TerminalSocketPath,
 };
-use signal_persona::origin::{OwnerIdentity, UnixUserIdentifier};
 use signal_persona::{
-    ComponentHealth, ComponentKind, ComponentName, EngineManagementProtocolVersion,
+    ComponentHealth, ComponentKind, ComponentName, DomainSocketMode, DomainSocketPath,
+    EngineManagementProtocolVersion, EngineManagementSocketMode, EngineManagementSocketPath,
     Frame as SupervisionFrame, FrameBody as SupervisionFrameBody, Operation as SupervisionRequest,
-    Presence, Query as SupervisionQuery, Reply as SupervisionReply, SocketMode as WireSocketMode,
-    WirePath,
+    OwnerIdentity, Presence, Query as SupervisionQuery, Reply as SupervisionReply,
+    UnixUserIdentifier,
 };
 use signal_terminal::{
-    Frame as TerminalFrame, FrameBody as TerminalFrameBody, Input as TerminalInputRoot,
+    Frame as TerminalFrame, FrameBody as TerminalFrameBody, Generation, Input as TerminalInputRoot,
     Output as TerminalOutput, TerminalGeneration, TerminalInputAccepted,
 };
 
@@ -130,7 +130,8 @@ impl TerminalAcceptanceSocket {
             match received_request.request {
                 TerminalInputRoot::TerminalInput(input) => {
                     let bytes = input
-                        .bytes
+                        .input_bytes
+                        .payload()
                         .payload()
                         .iter()
                         .map(|byte| *byte as u8)
@@ -141,7 +142,7 @@ impl TerminalAcceptanceSocket {
                         received_request.exchange,
                         TerminalOutput::TerminalInputAccepted(TerminalInputAccepted {
                             terminal: input.terminal,
-                            generation: TerminalGeneration::new(1),
+                            generation: Generation::new(TerminalGeneration::new(1)),
                         }),
                     )
                     .expect("terminal socket writes Signal acceptance");
@@ -667,22 +668,23 @@ fn harness_daemon_answers_component_supervision_relation() {
         supervision_exchange(
             &supervision_socket,
             SupervisionRequest::Announce(Presence {
-                expected_component: ComponentName::new("harness"),
-                expected_kind: ComponentKind::Harness,
+                expected_component: ComponentName::new("harness").into(),
+                expected_kind: ComponentKind::Harness.into(),
                 engine_management_protocol_version: EngineManagementProtocolVersion::new(1),
-            }),
+            }
+            .into()),
         ),
         SupervisionReply::Identified(identity)
-            if identity.name.as_str() == "harness"
-                && identity.kind == ComponentKind::Harness
+            if identity.payload().component_name == "harness"
+                && identity.payload().component_kind == ComponentKind::Harness
     ));
 
     assert!(matches!(
         supervision_exchange(
             &supervision_socket,
-            SupervisionRequest::Query(SupervisionQuery::ReadinessStatus(ComponentName::new(
-                "harness",
-            ))),
+            SupervisionRequest::Query(
+                SupervisionQuery::ReadinessStatus(ComponentName::new("harness",)).into()
+            ),
         ),
         SupervisionReply::Ready(_)
     ));
@@ -692,10 +694,11 @@ fn harness_daemon_answers_component_supervision_relation() {
             &supervision_socket,
             SupervisionRequest::Query(SupervisionQuery::HealthStatus(ComponentName::new(
                 "harness",
-            ))),
+            ))
+            .into()),
         ),
         SupervisionReply::HealthReport(report)
-            if report.health == ComponentHealth::Running
+            if *report.payload().payload() == ComponentHealth::Running
     ));
 }
 
@@ -710,18 +713,18 @@ fn supervision_exchange(socket: &Path, request: SupervisionRequest) -> Supervisi
 
 /// Builds a binary `HarnessDaemonConfiguration` against one fixture's sockets.
 struct DaemonConfigurationBuilder {
-    harness_socket_path: WirePath,
+    harness_socket_path: DomainSocketPath,
     harness_socket_mode: u32,
-    supervision_socket_path: WirePath,
+    supervision_socket_path: EngineManagementSocketPath,
     supervision_socket_mode: u32,
 }
 
 impl DaemonConfigurationBuilder {
     fn new(fixture: &SocketFixture) -> Self {
         Self {
-            harness_socket_path: WirePath::new(fixture.socket().display().to_string()),
+            harness_socket_path: DomainSocketPath::new(fixture.socket().display().to_string()),
             harness_socket_mode: 0o600,
-            supervision_socket_path: WirePath::new(
+            supervision_socket_path: EngineManagementSocketPath::new(
                 fixture.supervision_socket().display().to_string(),
             ),
             supervision_socket_mode: 0o600,
@@ -740,10 +743,12 @@ impl DaemonConfigurationBuilder {
 
     fn build(self, harnesses: Vec<HarnessInstanceConfiguration>) -> HarnessDaemonConfiguration {
         HarnessDaemonConfiguration {
-            harness_socket_path: self.harness_socket_path,
-            harness_socket_mode: WireSocketMode::new(self.harness_socket_mode),
-            supervision_socket_path: self.supervision_socket_path,
-            supervision_socket_mode: WireSocketMode::new(self.supervision_socket_mode),
+            domain_socket_path: self.harness_socket_path,
+            domain_socket_mode: DomainSocketMode::new(self.harness_socket_mode.into()),
+            engine_management_socket_path: self.supervision_socket_path,
+            engine_management_socket_mode: EngineManagementSocketMode::new(
+                self.supervision_socket_mode.into(),
+            ),
             owner_identity: OwnerIdentity::UnixUser(UnixUserIdentifier::new(1000)),
             harnesses,
         }
@@ -754,7 +759,7 @@ impl DaemonConfigurationBuilder {
 struct HarnessInstanceConfigurationBuilder {
     harness_name: HarnessName,
     harness_kind: ContractHarnessKind,
-    terminal_socket_path: Option<WirePath>,
+    terminal_socket_path: Option<TerminalSocketPath>,
     pi_rpc_adapter: Option<signal_harness::PiRpcJsonlAdapterConfiguration>,
 }
 
@@ -769,14 +774,14 @@ impl HarnessInstanceConfigurationBuilder {
     }
 
     fn with_terminal_socket_path(mut self, path: &Path) -> Self {
-        self.terminal_socket_path = Some(WirePath::new(path.display().to_string()));
+        self.terminal_socket_path = Some(TerminalSocketPath::new(path.display().to_string()));
         self
     }
 
     fn with_pi_rpc(mut self, fixture: &PiRpcFixture) -> Self {
         self.pi_rpc_adapter = Some(signal_harness::PiRpcJsonlAdapterConfiguration {
-            command_path: WirePath::new(fixture.command_path().display().to_string()),
-            session_directory_path: WirePath::new(
+            command_path: PiRpcCommandPath::new(fixture.command_path().display().to_string()),
+            session_directory_path: PiRpcSessionDirectoryPath::new(
                 fixture.session_directory().display().to_string(),
             ),
             delivery_mode: signal_harness::PiRpcDeliveryMode::Steer,

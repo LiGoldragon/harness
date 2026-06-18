@@ -14,8 +14,10 @@ use signal_harness::{
     HarnessDaemonConfiguration, HarnessEvent, HarnessFrame, HarnessFrameBody, HarnessHealth,
     HarnessName, HarnessReadiness, HarnessRequest, HarnessStatus, HarnessStatusQuery,
 };
-use signal_persona::origin::{OwnerIdentity, UnixUserIdentifier};
-use signal_persona::{SocketMode, WirePath};
+use signal_persona::{
+    DomainSocketMode, DomainSocketPath, EngineManagementSocketMode, EngineManagementSocketPath,
+    OwnerIdentity, UnixUserIdentifier,
+};
 use triad_runtime::{FrameBody as RuntimeFrameBody, LengthPrefixedCodec};
 
 #[derive(Debug)]
@@ -45,10 +47,12 @@ impl CliSocketFixture {
 
     fn configuration(&self) -> HarnessDaemonConfiguration {
         HarnessDaemonConfiguration {
-            harness_socket_path: WirePath::new(self.socket().display().to_string()),
-            harness_socket_mode: SocketMode::new(0o600),
-            supervision_socket_path: WirePath::new(self.meta_socket().display().to_string()),
-            supervision_socket_mode: SocketMode::new(0o600),
+            domain_socket_path: DomainSocketPath::new(self.socket().display().to_string()),
+            domain_socket_mode: DomainSocketMode::new(0o600),
+            engine_management_socket_path: EngineManagementSocketPath::new(
+                self.meta_socket().display().to_string(),
+            ),
+            engine_management_socket_mode: EngineManagementSocketMode::new(0o600),
             owner_identity: OwnerIdentity::UnixUser(UnixUserIdentifier::new(1000)),
             harnesses: Vec::new(),
         }

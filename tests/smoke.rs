@@ -3,7 +3,9 @@ use harness::{
     HarnessTerminalDelivery, HarnessTerminalEndpoint, TerminalDeliveryPath, TranscriptEvent,
     TranscriptLine,
 };
-use signal_terminal::{Input as TerminalInputRoot, TerminalInput, TerminalInputBytes};
+use signal_terminal::{
+    Input as TerminalInputRoot, InputBytes, Terminal, TerminalInput, TerminalInputBytes,
+};
 
 #[test]
 fn harness_binding_keeps_identity() {
@@ -88,10 +90,10 @@ fn terminal_binding_builds_typed_input_request() {
     assert_eq!(
         request,
         TerminalInputRoot::TerminalInput(TerminalInput {
-            terminal: binding.terminal().clone(),
-            bytes: TerminalInputBytes::new(
-                b"hello\r".iter().map(|byte| u64::from(*byte)).collect()
-            ),
+            terminal: Terminal::new(binding.terminal().clone()),
+            input_bytes: InputBytes::new(TerminalInputBytes::new(
+                b"hello\r".iter().map(|byte| u64::from(*byte)).collect(),
+            )),
         })
     );
 }

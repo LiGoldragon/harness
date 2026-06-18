@@ -5,8 +5,8 @@ use signal_frame::ExchangeIdentifier;
 use signal_persona::{
     ComponentHealth, ComponentHealthReport, ComponentIdentity, ComponentKind, ComponentName,
     ComponentReady, EngineManagementProtocolVersion, Frame as SupervisionFrame, FrameBody,
-    Operation as SupervisionRequest, Presence, Query as SupervisionQuery,
-    Reply as SupervisionReply, StopAcknowledgement,
+    Operation as SupervisionRequest, Query as SupervisionQuery, Reply as SupervisionReply,
+    StopAcknowledgement,
 };
 
 use crate::error::{Error, Result};
@@ -64,29 +64,26 @@ impl SupervisionPhase {
     fn reply(&mut self, request: SupervisionRequest) -> SupervisionReply {
         self.request_count = self.request_count.saturating_add(1);
         match request {
-            SupervisionRequest::Announce(Presence { .. }) => {
-                SupervisionReply::Identified(ComponentIdentity {
-                    name: self.profile.name.clone(),
-                    kind: self.profile.kind,
-                    engine_management_protocol_version: EngineManagementProtocolVersion::new(1),
-                    last_fatal_startup_error: None,
-                })
-            }
-            SupervisionRequest::Query(SupervisionQuery::ReadinessStatus(_)) => {
-                SupervisionReply::Ready(ComponentReady {
-                    component_started_at: None,
-                })
-            }
-            SupervisionRequest::Query(SupervisionQuery::HealthStatus(_)) => {
-                SupervisionReply::HealthReport(ComponentHealthReport {
-                    health: self.profile.health,
-                })
-            }
-            SupervisionRequest::Stop(_) => {
-                SupervisionReply::StopAcknowledged(StopAcknowledgement {
-                    drain_completed_at: None,
-                })
-            }
+            SupervisionRequest::Announce(_) => SupervisionReply::Identified(
+                ComponentIdentity::new(
+                    self.profile.name.clone(),
+                    self.profile.kind,
+                    EngineManagementProtocolVersion::new(1),
+                    None,
+                )
+                .into(),
+            ),
+            SupervisionRequest::Query(query) => match query.into_payload() {
+                SupervisionQuery::ReadinessStatus(_) => {
+                    SupervisionReply::Ready(ComponentReady::from_started_at(None).into())
+                }
+                SupervisionQuery::HealthStatus(_) => SupervisionReply::HealthReport(
+                    ComponentHealthReport::new(self.profile.health).into(),
+                ),
+            },
+            SupervisionRequest::Stop(_) => SupervisionReply::StopAcknowledged(
+                StopAcknowledgement::from_drain_completed_at(None).into(),
+            ),
         }
     }
 }
