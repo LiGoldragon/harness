@@ -25,7 +25,7 @@ name = "harness-daemon"
 path = "src/bin/harness_daemon.rs"
 
 [dependencies]
-kameo                   = { version = "0.20", default-features = false, features = ["macros", "tracing"] }
+kameo                   = { git = "https://github.com/LiGoldragon/kameo.git", branch = "main", default-features = false, features = ["macros", "tracing"] }
 meta-signal-harness     = { git = "https://github.com/LiGoldragon/meta-signal-harness.git", branch = "main" }
 nota-next               = { git = "https://github.com/LiGoldragon/nota-next.git", branch = "main" }
 rkyv                    = { version = "0.8", default-features = false, features = ["std", "bytecheck", "little_endian", "pointer_width_32", "unaligned"] }
@@ -52,3 +52,6 @@ message       = { git = "https://github.com/LiGoldragon/message.git", branch = "
 ] }
 signal-router = { git = "https://github.com/LiGoldragon/signal-router.git", branch = "main" }
 tempfile      = "3"
+
+[patch.crates-io]
+kameo = { git = "https://github.com/LiGoldragon/kameo.git", branch = "main" }
