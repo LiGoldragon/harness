@@ -675,7 +675,7 @@ fn harness_daemon_answers_component_supervision_relation() {
             .into()),
         ),
         SupervisionReply::Identified(identity)
-            if identity.payload().component_name == "harness"
+            if identity.payload().component_name == ComponentName::new("harness")
                 && identity.payload().component_kind == ComponentKind::Harness
     ));
 

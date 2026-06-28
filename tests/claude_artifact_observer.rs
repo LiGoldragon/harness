@@ -75,6 +75,26 @@ fn claude_artifact_observer_can_filter_by_session_identifier() {
 }
 
 #[test]
+fn claude_artifact_observer_requires_final_marker_from_assistant_message() {
+    let fixture = ClaudeFixture::new("/tmp/claude-proof");
+    fixture.write_project_jsonl(
+        "session-alpha.jsonl",
+        &[
+            r#"{"type":"user","cwd":"/tmp/claude-proof","sessionId":"session-alpha","timestamp":"2026-06-28T10:00:00Z","message":{"role":"user","content":[{"type":"text","text":"PROMPT_MARKER reply with FINAL_MARKER"}]}}"#,
+            r#"{"type":"assistant","cwd":"/tmp/claude-proof","sessionId":"session-alpha","timestamp":"2026-06-28T10:00:06Z","message":{"role":"assistant","content":[{"type":"text","text":"working"}],"stop_reason":"end_turn"}}"#,
+        ],
+    );
+
+    let snapshot = ClaudeArtifactObserver::with_home(fixture.home_directory(), "/tmp/claude-proof")
+        .snapshot()
+        .expect("snapshot recovers fixture");
+    let turn = snapshot.recovered_turn();
+
+    assert!(turn.contains_text("FINAL_MARKER"));
+    assert!(!turn.has_completed_marked_turn("PROMPT_MARKER", "FINAL_MARKER"));
+}
+
+#[test]
 fn claude_artifact_observer_ignores_transient_partial_jsonl_line() {
     let fixture = ClaudeFixture::new("/tmp/claude-proof");
     fixture.write_project_jsonl(

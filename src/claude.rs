@@ -1055,6 +1055,8 @@ pub struct ClaudeRecoveredTurn {
     stop_reasons: Vec<String>,
     timestamps: Vec<String>,
     text_fragments: Vec<String>,
+    user_prompt_text_fragments: Vec<String>,
+    assistant_text_fragments: Vec<String>,
     tool_calls: Vec<ClaudeToolCall>,
     tool_results: Vec<ClaudeToolResult>,
     file_edits: Vec<ClaudeFileEdit>,
@@ -1074,6 +1076,8 @@ impl ClaudeRecoveredTurn {
             stop_reasons: Vec::new(),
             timestamps: Vec::new(),
             text_fragments: Vec::new(),
+            user_prompt_text_fragments: Vec::new(),
+            assistant_text_fragments: Vec::new(),
             tool_calls: Vec::new(),
             tool_results: Vec::new(),
             file_edits: Vec::new(),
@@ -1149,9 +1153,21 @@ impl ClaudeRecoveredTurn {
     }
 
     pub fn has_completed_marked_turn(&self, prompt_marker: &str, final_marker: &str) -> bool {
-        self.contains_text(prompt_marker)
-            && self.contains_text(final_marker)
+        self.user_prompt_contains_text(prompt_marker)
+            && self.assistant_contains_text(final_marker)
             && self.has_stop_reason_end_turn()
+    }
+
+    fn user_prompt_contains_text(&self, needle: &str) -> bool {
+        self.user_prompt_text_fragments
+            .iter()
+            .any(|fragment| fragment.contains(needle))
+    }
+
+    fn assistant_contains_text(&self, needle: &str) -> bool {
+        self.assistant_text_fragments
+            .iter()
+            .any(|fragment| fragment.contains(needle))
     }
 
     fn observe_record(&mut self, record: &ClaudeJsonLine) {
@@ -1174,7 +1190,16 @@ impl ClaudeRecoveredTurn {
         if let Some(timestamp) = record.timestamp() {
             self.timestamps.push(timestamp.to_string());
         }
-        self.text_fragments.extend(record.text_fragments());
+        let text_fragments = record.text_fragments();
+        if record.record_type() == Some("user") {
+            self.user_prompt_text_fragments
+                .extend(text_fragments.iter().cloned());
+        }
+        if record.record_type() == Some("assistant") {
+            self.assistant_text_fragments
+                .extend(text_fragments.iter().cloned());
+        }
+        self.text_fragments.extend(text_fragments);
         self.tool_calls.extend(record.tool_calls());
         self.tool_results.extend(record.tool_results());
         self.file_edits.extend(record.file_edits());
