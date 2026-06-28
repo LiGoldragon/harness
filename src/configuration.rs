@@ -21,8 +21,8 @@ pub struct Configuration {
 
 impl Configuration {
     pub fn from_raw(raw: HarnessDaemonConfiguration) -> Self {
-        let harness_socket_path = PathBuf::from(raw.domain_socket_path.as_ref());
-        let supervision_socket_path = PathBuf::from(raw.engine_management_socket_path.as_ref());
+        let harness_socket_path = PathBuf::from(raw.domain_socket_path.payload());
+        let supervision_socket_path = PathBuf::from(raw.engine_management_socket_path.payload());
         let state_dir = harness_socket_path
             .parent()
             .map(Path::to_path_buf)
