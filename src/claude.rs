@@ -3,9 +3,11 @@ use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use serde_json::{Value, json};
 
 use crate::{Error, Result};
@@ -16,6 +18,7 @@ pub struct ClaudeArtifactObserver {
     current_working_directory: PathBuf,
     session_identifier: Option<String>,
     poll_interval: Duration,
+    event_reconciliation_interval: Duration,
 }
 
 impl ClaudeArtifactObserver {
@@ -35,6 +38,7 @@ impl ClaudeArtifactObserver {
             current_working_directory: current_working_directory.into(),
             session_identifier: None,
             poll_interval: Duration::from_millis(250),
+            event_reconciliation_interval: Duration::from_secs(5),
         }
     }
 
@@ -45,6 +49,14 @@ impl ClaudeArtifactObserver {
 
     pub fn with_poll_interval(mut self, poll_interval: Duration) -> Self {
         self.poll_interval = poll_interval;
+        self
+    }
+
+    pub fn with_event_reconciliation_interval(
+        mut self,
+        event_reconciliation_interval: Duration,
+    ) -> Self {
+        self.event_reconciliation_interval = event_reconciliation_interval;
         self
     }
 
@@ -64,26 +76,60 @@ impl ClaudeArtifactObserver {
         ClaudeArtifactSnapshot::from_observer(self)
     }
 
+    pub fn event_watcher(&self) -> Result<ClaudeArtifactEventWatcher> {
+        ClaudeArtifactEventWatcher::from_observer(self.clone())
+    }
+
     pub fn wait_for_markers(
         &self,
         prompt_marker: &str,
         final_marker: &str,
         timeout: Duration,
     ) -> Result<ClaudeArtifactSnapshot> {
+        Ok(self
+            .wait_for_markers_with_report(prompt_marker, final_marker, timeout)?
+            .into_snapshot())
+    }
+
+    pub fn wait_for_markers_with_report(
+        &self,
+        prompt_marker: &str,
+        final_marker: &str,
+        timeout: Duration,
+    ) -> Result<ClaudeArtifactWaitReport> {
+        match self.event_watcher() {
+            Ok(mut watcher) => watcher.wait_for_markers(prompt_marker, final_marker, timeout),
+            Err(_) => self.wait_for_markers_by_polling(prompt_marker, final_marker, timeout),
+        }
+    }
+
+    fn wait_for_markers_by_polling(
+        &self,
+        prompt_marker: &str,
+        final_marker: &str,
+        timeout: Duration,
+    ) -> Result<ClaudeArtifactWaitReport> {
         let deadline = Instant::now() + timeout;
+        let mut fallback_count = 0_u64;
         loop {
             let snapshot = self.snapshot()?;
             if snapshot
                 .recovered_turn()
                 .has_completed_marked_turn(prompt_marker, final_marker)
             {
-                return Ok(snapshot);
+                return Ok(ClaudeArtifactWaitReport::new(
+                    snapshot,
+                    ClaudeObservationStrategy::PollingFallback,
+                    0,
+                    fallback_count,
+                ));
             }
             if Instant::now() >= deadline {
                 return Err(Error::ClaudeObservationTimeout {
                     current_working_directory: self.current_working_directory.clone(),
                 });
             }
+            fallback_count = fallback_count.saturating_add(1);
             thread::sleep(self.poll_interval);
         }
     }
@@ -112,6 +158,26 @@ impl ClaudeArtifactObserver {
         }
         paths.sort();
         Ok(paths)
+    }
+
+    fn watch_roots(&self) -> Vec<PathBuf> {
+        let projects_root = self.artifact_root.join("projects");
+        let encoded_directory = projects_root.join(
+            ClaudeProjectDirectoryName::from_path(&self.current_working_directory).into_string(),
+        );
+        let sessions_root = self.artifact_root.join("sessions");
+        let mut roots = Vec::new();
+        if encoded_directory.is_dir() {
+            roots.push(encoded_directory);
+        } else if projects_root.is_dir() {
+            roots.push(projects_root);
+        }
+        if sessions_root.is_dir() {
+            roots.push(sessions_root);
+        }
+        roots.sort();
+        roots.dedup();
+        roots
     }
 
     fn record_matches(&self, record: &ClaudeJsonLine) -> bool {
@@ -148,6 +214,285 @@ impl ClaudeArtifactObserver {
                         .is_some_and(|record_identifier| record_identifier == session_identifier)
                 });
         directory_matches || session_matches
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ClaudeObservationStrategy {
+    FileEvents,
+    PollingFallback,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ClaudeArtifactWaitReport {
+    snapshot: ClaudeArtifactSnapshot,
+    strategy: ClaudeObservationStrategy,
+    file_event_count: u64,
+    polling_fallback_count: u64,
+}
+
+impl ClaudeArtifactWaitReport {
+    fn new(
+        snapshot: ClaudeArtifactSnapshot,
+        strategy: ClaudeObservationStrategy,
+        file_event_count: u64,
+        polling_fallback_count: u64,
+    ) -> Self {
+        Self {
+            snapshot,
+            strategy,
+            file_event_count,
+            polling_fallback_count,
+        }
+    }
+
+    pub fn snapshot(&self) -> &ClaudeArtifactSnapshot {
+        &self.snapshot
+    }
+
+    pub fn into_snapshot(self) -> ClaudeArtifactSnapshot {
+        self.snapshot
+    }
+
+    pub fn strategy(&self) -> ClaudeObservationStrategy {
+        self.strategy
+    }
+
+    pub fn file_event_count(&self) -> u64 {
+        self.file_event_count
+    }
+
+    pub fn polling_fallback_count(&self) -> u64 {
+        self.polling_fallback_count
+    }
+
+    pub fn summary_json(
+        &self,
+        prompt_marker: &str,
+        final_marker: &str,
+        tool_marker: &str,
+    ) -> Value {
+        let mut summary = self
+            .snapshot
+            .summary_json(prompt_marker, final_marker, tool_marker);
+        if let Value::Object(map) = &mut summary {
+            map.insert(
+                "observation_strategy".to_string(),
+                json!(match self.strategy {
+                    ClaudeObservationStrategy::FileEvents => "file_events",
+                    ClaudeObservationStrategy::PollingFallback => "polling_fallback",
+                }),
+            );
+            map.insert("file_event_count".to_string(), json!(self.file_event_count));
+            map.insert(
+                "polling_fallback_count".to_string(),
+                json!(self.polling_fallback_count),
+            );
+        }
+        summary
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum ClaudeArtifactWake {
+    FileEvent {
+        snapshot: ClaudeArtifactSnapshot,
+        event_paths: Vec<PathBuf>,
+    },
+    Reconciliation {
+        snapshot: ClaudeArtifactSnapshot,
+    },
+}
+
+impl ClaudeArtifactWake {
+    pub fn snapshot(&self) -> &ClaudeArtifactSnapshot {
+        match self {
+            Self::FileEvent { snapshot, .. } | Self::Reconciliation { snapshot } => snapshot,
+        }
+    }
+
+    pub fn event_paths(&self) -> &[PathBuf] {
+        match self {
+            Self::FileEvent { event_paths, .. } => event_paths,
+            Self::Reconciliation { .. } => &[],
+        }
+    }
+
+    pub fn used_file_event(&self) -> bool {
+        matches!(self, Self::FileEvent { .. })
+    }
+}
+
+#[derive(Debug)]
+pub struct ClaudeArtifactEventWatcher {
+    observer: ClaudeArtifactObserver,
+    event_receiver: Receiver<notify::Result<Event>>,
+    _event_sender: Sender<notify::Result<Event>>,
+    watcher: RecommendedWatcher,
+    watched_roots: BTreeSet<PathBuf>,
+}
+
+impl ClaudeArtifactEventWatcher {
+    fn from_observer(observer: ClaudeArtifactObserver) -> Result<Self> {
+        let (event_sender, event_receiver) = channel();
+        let callback_sender = event_sender.clone();
+        let watcher = notify::recommended_watcher(move |event| {
+            let _ = callback_sender.send(event);
+        })
+        .map_err(|error| ClaudeNotifyError::from(error).into_error())?;
+        let mut watcher = Self {
+            observer,
+            event_receiver,
+            _event_sender: event_sender,
+            watcher,
+            watched_roots: BTreeSet::new(),
+        };
+        watcher.refresh_watched_roots()?;
+        if watcher.watched_roots.is_empty() {
+            return Err(Error::ClaudeArtifactWatcher {
+                message: "no existing Claude artifact directories to watch".to_string(),
+            });
+        }
+        Ok(watcher)
+    }
+
+    pub fn watched_roots(&self) -> Vec<PathBuf> {
+        self.watched_roots.iter().cloned().collect()
+    }
+
+    pub fn snapshot(&self) -> Result<ClaudeArtifactSnapshot> {
+        self.observer.snapshot()
+    }
+
+    pub fn wait_for_next_snapshot(&mut self, timeout: Duration) -> Result<ClaudeArtifactWake> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(Error::ClaudeObservationTimeout {
+                    current_working_directory: self.observer.current_working_directory.clone(),
+                });
+            }
+            match self.event_receiver.recv_timeout(remaining) {
+                Ok(Ok(event)) => {
+                    self.refresh_watched_roots()?;
+                    return Ok(ClaudeArtifactWake::FileEvent {
+                        snapshot: self.observer.snapshot()?,
+                        event_paths: event.paths,
+                    });
+                }
+                Ok(Err(error)) => return Err(ClaudeNotifyError::from(error).into_error()),
+                Err(RecvTimeoutError::Timeout) => {
+                    return Err(Error::ClaudeObservationTimeout {
+                        current_working_directory: self.observer.current_working_directory.clone(),
+                    });
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    return Err(Error::ClaudeArtifactWatcher {
+                        message: "file event channel disconnected".to_string(),
+                    });
+                }
+            }
+        }
+    }
+
+    pub fn wait_for_markers(
+        &mut self,
+        prompt_marker: &str,
+        final_marker: &str,
+        timeout: Duration,
+    ) -> Result<ClaudeArtifactWaitReport> {
+        let deadline = Instant::now() + timeout;
+        let mut file_event_count = 0_u64;
+        let mut polling_fallback_count = 0_u64;
+        loop {
+            let snapshot = self.observer.snapshot()?;
+            if snapshot
+                .recovered_turn()
+                .has_completed_marked_turn(prompt_marker, final_marker)
+            {
+                return Ok(ClaudeArtifactWaitReport::new(
+                    snapshot,
+                    ClaudeObservationStrategy::FileEvents,
+                    file_event_count,
+                    polling_fallback_count,
+                ));
+            }
+            if Instant::now() >= deadline {
+                return Err(Error::ClaudeObservationTimeout {
+                    current_working_directory: self.observer.current_working_directory.clone(),
+                });
+            }
+            match self.wait_for_change_before(deadline)? {
+                ClaudeArtifactChange::FileEvent => {
+                    file_event_count = file_event_count.saturating_add(1);
+                }
+                ClaudeArtifactChange::Reconciliation => {
+                    polling_fallback_count = polling_fallback_count.saturating_add(1);
+                }
+            }
+        }
+    }
+
+    fn wait_for_change_before(&mut self, deadline: Instant) -> Result<ClaudeArtifactChange> {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(Error::ClaudeObservationTimeout {
+                current_working_directory: self.observer.current_working_directory.clone(),
+            });
+        }
+        let wait_duration = remaining.min(self.observer.event_reconciliation_interval);
+        match self.event_receiver.recv_timeout(wait_duration) {
+            Ok(Ok(_event)) => {
+                self.refresh_watched_roots()?;
+                Ok(ClaudeArtifactChange::FileEvent)
+            }
+            Ok(Err(error)) => Err(ClaudeNotifyError::from(error).into_error()),
+            Err(RecvTimeoutError::Timeout) => Ok(ClaudeArtifactChange::Reconciliation),
+            Err(RecvTimeoutError::Disconnected) => Err(Error::ClaudeArtifactWatcher {
+                message: "file event channel disconnected".to_string(),
+            }),
+        }
+    }
+
+    fn refresh_watched_roots(&mut self) -> Result<()> {
+        for root in self.observer.watch_roots() {
+            if self.watched_roots.contains(&root) {
+                continue;
+            }
+            self.watcher
+                .watch(&root, RecursiveMode::Recursive)
+                .map_err(|error| ClaudeNotifyError::from(error).into_error())?;
+            self.watched_roots.insert(root);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ClaudeArtifactChange {
+    FileEvent,
+    Reconciliation,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ClaudeNotifyError {
+    message: String,
+}
+
+impl ClaudeNotifyError {
+    fn into_error(self) -> Error {
+        Error::ClaudeArtifactWatcher {
+            message: self.message,
+        }
+    }
+}
+
+impl From<notify::Error> for ClaudeNotifyError {
+    fn from(value: notify::Error) -> Self {
+        Self {
+            message: value.to_string(),
+        }
     }
 }
 

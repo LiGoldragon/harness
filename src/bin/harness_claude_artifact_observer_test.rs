@@ -83,12 +83,15 @@ impl ObserverCommandLine {
         if let Some(session_identifier) = &self.session_identifier {
             observer = observer.with_session_identifier(session_identifier);
         }
-        let snapshot =
-            observer.wait_for_markers(&self.prompt_marker, &self.final_marker, self.timeout)?;
+        let report = observer.wait_for_markers_with_report(
+            &self.prompt_marker,
+            &self.final_marker,
+            self.timeout,
+        )?;
         writeln!(
             output,
             "{}",
-            snapshot.summary_json(&self.prompt_marker, &self.final_marker, &self.tool_marker)
+            report.summary_json(&self.prompt_marker, &self.final_marker, &self.tool_marker)
         )?;
         Ok(())
     }

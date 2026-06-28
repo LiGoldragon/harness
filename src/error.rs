@@ -60,6 +60,9 @@ pub enum Error {
     #[error("claude artifact observation timed out for {current_working_directory}")]
     ClaudeObservationTimeout { current_working_directory: PathBuf },
 
+    #[error("claude artifact watcher: {message}")]
+    ClaudeArtifactWatcher { message: String },
+
     #[error("claude artifact observer argument: {message}")]
     ClaudeObserverArgument { message: String },
 

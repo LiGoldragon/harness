@@ -1,6 +1,9 @@
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::thread;
+use std::time::Duration;
 
-use harness::ClaudeArtifactObserver;
+use harness::{ClaudeArtifactObserver, ClaudeObservationStrategy};
 use tempfile::TempDir;
 
 #[test]
@@ -94,6 +97,111 @@ fn claude_artifact_observer_ignores_transient_partial_jsonl_line() {
     );
 }
 
+#[test]
+fn claude_artifact_event_watcher_wakes_on_project_jsonl_create_and_append() {
+    let fixture = ClaudeFixture::new("/tmp/claude-proof");
+    fixture.create_artifact_directories();
+    let mut watcher =
+        ClaudeArtifactObserver::with_home(fixture.home_directory(), "/tmp/claude-proof")
+            .event_watcher()
+            .expect("event watcher starts on existing artifact directories");
+    let project_jsonl = fixture.project_jsonl_path("session-alpha.jsonl");
+
+    fixture.append_project_jsonl(
+        &project_jsonl,
+        r#"{"type":"user","cwd":"/tmp/claude-proof","sessionId":"session-alpha","timestamp":"2026-06-28T10:00:00Z","message":{"role":"user","content":[{"type":"text","text":"PROMPT_MARKER"}]}}"#,
+    );
+    let prompt_wake = watcher
+        .wait_for_next_snapshot(Duration::from_secs(5))
+        .expect("project jsonl create event wakes observer");
+
+    assert!(prompt_wake.used_file_event());
+    assert!(
+        prompt_wake
+            .snapshot()
+            .recovered_turn()
+            .contains_text("PROMPT_MARKER")
+    );
+
+    fixture.append_project_jsonl(
+        &project_jsonl,
+        r#"{"type":"user","cwd":"/tmp/claude-proof","sessionId":"session-alpha","timestamp":"2026-06-28T10:00:02Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool-1","content":"TOOL_MARKER"}]}}"#,
+    );
+    fixture.append_project_jsonl(
+        &project_jsonl,
+        r#"{"type":"assistant","cwd":"/tmp/claude-proof","sessionId":"session-alpha","timestamp":"2026-06-28T10:00:04Z","message":{"role":"assistant","model":"claude-haiku","content":[{"type":"text","text":"FINAL_MARKER"}],"stop_reason":"end_turn"}}"#,
+    );
+    let final_wake = watcher
+        .wait_for_next_snapshot(Duration::from_secs(5))
+        .expect("project jsonl append event wakes observer");
+    let turn = final_wake.snapshot().recovered_turn();
+
+    assert!(final_wake.used_file_event());
+    assert!(turn.contains_text("TOOL_MARKER"));
+    assert!(turn.has_completed_marked_turn("PROMPT_MARKER", "FINAL_MARKER"));
+}
+
+#[test]
+fn claude_artifact_event_watcher_wakes_on_session_file_create() {
+    let fixture = ClaudeFixture::new("/tmp/claude-proof");
+    fixture.create_artifact_directories();
+    let mut watcher =
+        ClaudeArtifactObserver::with_home(fixture.home_directory(), "/tmp/claude-proof")
+            .event_watcher()
+            .expect("event watcher starts on existing session directory");
+
+    fixture.write_session_file(
+        "session-alpha.json",
+        r#"{"sessionId":"session-alpha","cwd":"/tmp/claude-proof","permissionMode":"bypassPermissions"}"#,
+    );
+    let wake = watcher
+        .wait_for_next_snapshot(Duration::from_secs(5))
+        .expect("session file create event wakes observer");
+    let turn = wake.snapshot().recovered_turn();
+
+    assert!(wake.used_file_event());
+    assert_eq!(wake.snapshot().session_identifier(), Some("session-alpha"));
+    assert_eq!(turn.permission_modes(), &["bypassPermissions".to_string()]);
+}
+
+#[test]
+fn claude_artifact_wait_report_marks_file_event_strategy() {
+    let fixture = ClaudeFixture::new("/tmp/claude-proof");
+    fixture.create_artifact_directories();
+    let mut watcher =
+        ClaudeArtifactObserver::with_home(fixture.home_directory(), "/tmp/claude-proof")
+            .event_watcher()
+            .expect("event watcher starts");
+    let project_jsonl = fixture.project_jsonl_path("session-alpha.jsonl");
+
+    fixture.append_project_jsonl(
+        &project_jsonl,
+        r#"{"type":"user","cwd":"/tmp/claude-proof","sessionId":"session-alpha","timestamp":"2026-06-28T10:00:00Z","message":{"role":"user","content":[{"type":"text","text":"PROMPT_MARKER"}]}}"#,
+    );
+    let writer_path = project_jsonl.clone();
+    let writer = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(50));
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(writer_path)
+            .expect("open project jsonl");
+        writeln!(
+            file,
+            r#"{{"type":"assistant","cwd":"/tmp/claude-proof","sessionId":"session-alpha","timestamp":"2026-06-28T10:00:04Z","message":{{"role":"assistant","model":"claude-haiku","content":[{{"type":"text","text":"FINAL_MARKER"}}],"stop_reason":"end_turn"}}}}"#
+        )
+        .expect("append final marker");
+        file.flush().expect("flush final marker");
+    });
+    let report = watcher
+        .wait_for_markers("PROMPT_MARKER", "FINAL_MARKER", Duration::from_secs(5))
+        .expect("event watcher recovers completed markers");
+    writer.join().expect("writer thread finishes");
+
+    assert_eq!(report.strategy(), ClaudeObservationStrategy::FileEvents);
+    assert!(report.file_event_count() > 0);
+    assert_eq!(report.polling_fallback_count(), 0);
+}
+
 #[derive(Debug)]
 struct ClaudeFixture {
     home: TempDir,
@@ -112,19 +220,45 @@ impl ClaudeFixture {
         self.home.path()
     }
 
-    fn write_project_jsonl(&self, file_name: &str, lines: &[&str]) {
-        let directory = self
-            .home
+    fn create_artifact_directories(&self) {
+        fs::create_dir_all(self.project_directory()).expect("create project directory");
+        fs::create_dir_all(self.session_directory()).expect("create session directory");
+    }
+
+    fn project_directory(&self) -> std::path::PathBuf {
+        self.home
             .path()
             .join(".claude")
             .join("projects")
-            .join(self.current_working_directory.replace('/', "-"));
+            .join(self.current_working_directory.replace('/', "-"))
+    }
+
+    fn session_directory(&self) -> std::path::PathBuf {
+        self.home.path().join(".claude").join("sessions")
+    }
+
+    fn project_jsonl_path(&self, file_name: &str) -> std::path::PathBuf {
+        self.project_directory().join(file_name)
+    }
+
+    fn write_project_jsonl(&self, file_name: &str, lines: &[&str]) {
+        let directory = self.project_directory();
         fs::create_dir_all(&directory).expect("create project directory");
         fs::write(directory.join(file_name), lines.join("\n")).expect("write project jsonl");
     }
 
+    fn append_project_jsonl(&self, path: &std::path::Path, line: &str) {
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .expect("open project jsonl");
+        writeln!(file, "{line}").expect("append project jsonl");
+        file.flush().expect("flush project jsonl");
+    }
+
     fn write_session_file(&self, file_name: &str, text: &str) {
-        let directory = self.home.path().join(".claude").join("sessions");
+        let directory = self.session_directory();
         fs::create_dir_all(&directory).expect("create session directory");
         fs::write(directory.join(file_name), text).expect("write session json");
     }
