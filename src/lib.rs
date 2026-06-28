@@ -1,3 +1,4 @@
+pub mod claude;
 pub mod cli_argument;
 pub mod client;
 pub mod command;
@@ -15,6 +16,10 @@ pub mod supervision;
 pub mod terminal;
 pub mod transcript;
 
+pub use claude::{
+    ClaudeArtifactObserver, ClaudeArtifactSnapshot, ClaudeFileEdit, ClaudeRecoveredTurn,
+    ClaudeSessionArtifact, ClaudeStatusTransition, ClaudeToolCall, ClaudeToolResult,
+};
 pub use cli_argument::NotaCommandText;
 pub use client::{HarnessClient, HarnessCommandEnvironment, HarnessCommandLine, HarnessEndpoint};
 pub use command::HarnessDaemonConfigurationFile;

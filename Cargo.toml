@@ -24,6 +24,10 @@ path = "src/bin/meta_harness.rs"
 name = "harness-daemon"
 path = "src/bin/harness_daemon.rs"
 
+[[bin]]
+name = "harness-claude-artifact-observer-test"
+path = "src/bin/harness_claude_artifact_observer_test.rs"
+
 [dependencies]
 kameo                   = { git = "https://github.com/LiGoldragon/kameo.git", branch = "main", default-features = false, features = ["macros", "tracing"] }
 meta-signal-harness     = { git = "https://github.com/LiGoldragon/meta-signal-harness.git", branch = "main" }

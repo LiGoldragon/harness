@@ -57,6 +57,12 @@ pub enum Error {
     #[error("json: {0}")]
     Json(#[from] serde_json::Error),
 
+    #[error("claude artifact observation timed out for {current_working_directory}")]
+    ClaudeObservationTimeout { current_working_directory: PathBuf },
+
+    #[error("claude artifact observer argument: {message}")]
+    ClaudeObserverArgument { message: String },
+
     #[error("pi rpc input stream was unavailable")]
     PiRpcInputUnavailable,
 
