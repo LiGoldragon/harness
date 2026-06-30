@@ -121,6 +121,10 @@
           harness-daemon-rejects-message-delivery-without-terminal-endpoint = context.cargoTest "daemon" "harness_daemon_rejects_message_delivery_without_terminal_endpoint";
           harness-daemon-answers-component-supervision-relation = context.cargoTest "daemon" "harness_daemon_answers_component_supervision_relation";
           harness-daemon-answers-meta-harness-relation = context.cargoTest "daemon" "harness_daemon_answers_meta_harness_relation_with_typed_unimplemented";
+          harness-daemon-watch-transcript-returns-typed-snapshot = context.cargoTest "daemon" "harness_daemon_watch_transcript_returns_typed_snapshot";
+          harness-daemon-unwatch-transcript-returns-final-retraction-ack-on-subscribed-stream = context.cargoTest "daemon" "harness_daemon_unwatch_transcript_returns_final_retraction_ack_on_subscribed_stream";
+          harness-daemon-watch-transcript-stream-delivers-published-observation-and-final-ack = context.cargoTest "daemon" "harness_daemon_watch_transcript_stream_delivers_published_observation_and_final_ack";
+          harness-daemon-rejects-nested-watch-without-leaking-subscription = context.cargoTest "daemon" "harness_daemon_rejects_nested_watch_without_leaking_subscription";
           harness-daemon-returns-typed-unimplemented = context.cargoTest "daemon" "harness_daemon_returns_typed_unimplemented";
           harness-cli-reaches-working-socket = context.cargoTest "component_cli" "harness_cli_reaches_working_socket_and_prints_typed_reply";
           meta-harness-cli-reaches-policy-socket = context.cargoTest "component_cli" "meta_harness_cli_reaches_policy_socket_and_prints_typed_reply";

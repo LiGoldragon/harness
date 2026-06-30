@@ -20,7 +20,7 @@ use std::sync::mpsc::{Receiver, channel};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use harness::HarnessDaemonConfigurationFile;
+use harness::{HarnessDaemonConfigurationFile, HarnessEngine};
 use meta_signal_harness::{
     MetaHarnessFrame, MetaHarnessFrameBody, MetaHarnessReply, MetaHarnessRequest,
     RequestUnimplemented as MetaRequestUnimplemented,
@@ -34,8 +34,10 @@ use signal_harness::{
     HarnessEvent, HarnessFrame, HarnessFrameBody, HarnessHealth, HarnessInstanceConfiguration,
     HarnessKind as ContractHarnessKind, HarnessName, HarnessOperationKind, HarnessReadiness,
     HarnessRequest, HarnessRequestUnimplemented, HarnessStatus, HarnessStatusQuery,
+    HarnessStreamEvent, HarnessTranscriptSequence, HarnessTranscriptToken,
     HarnessUnimplementedReason, InteractionPrompt, MessageBody, MessageDelivery, MessageSender,
     MessageSlot, PiRpcCommandPath, PiRpcSessionDirectoryPath, TerminalSocketPath,
+    TranscriptObservation, WatchHarnessTranscript,
 };
 use signal_persona::{
     ComponentHealth, ComponentKind, ComponentName, DomainSocketMode, DomainSocketPath,
@@ -48,6 +50,7 @@ use signal_terminal::{
     Frame as TerminalFrame, FrameBody as TerminalFrameBody, Generation, Input as TerminalInputRoot,
     Output as TerminalOutput, TerminalGeneration, TerminalInputAccepted,
 };
+use triad_runtime::{FrameBody as LengthPrefixedFrameBody, LengthPrefixedCodec};
 
 const MAXIMUM_FRAME_BYTES: usize = 1024 * 1024;
 
@@ -586,6 +589,235 @@ fn harness_daemon_answers_status_readiness() {
 }
 
 #[test]
+fn harness_daemon_watch_transcript_returns_typed_snapshot() {
+    let fixture = SocketFixture::new("watch-transcript");
+    let configuration_path = fixture.root.join("harness-daemon.rkyv");
+    write_configuration(
+        &configuration_path,
+        DaemonConfigurationBuilder::new(&fixture).build(vec![fixture_instance("operator").build()]),
+    );
+    let _daemon = SpawnedHarnessDaemon::spawn(&configuration_path);
+    wait_for_socket(fixture.socket());
+
+    let mut stream = UnixStream::connect(fixture.socket()).expect("client connects");
+    write_working_request(
+        &mut stream,
+        WatchHarnessTranscript {
+            harness: HarnessName::new("operator"),
+        }
+        .into(),
+    );
+    let event = read_working_event(&mut stream);
+
+    match event {
+        HarnessEvent::HarnessTranscriptSnapshot(snapshot) => {
+            assert_eq!(snapshot.harness, HarnessName::new("operator"));
+            assert_eq!(snapshot.current_sequence.into_u64(), 0);
+        }
+        other => panic!("expected transcript snapshot, got {other:?}"),
+    }
+}
+
+#[test]
+fn harness_daemon_unwatch_transcript_returns_final_retraction_ack_on_subscribed_stream() {
+    let fixture = SocketFixture::new("unwatch-transcript");
+    let configuration_path = fixture.root.join("harness-daemon.rkyv");
+    write_configuration(
+        &configuration_path,
+        DaemonConfigurationBuilder::new(&fixture).build(vec![fixture_instance("operator").build()]),
+    );
+    let _daemon = SpawnedHarnessDaemon::spawn(&configuration_path);
+    wait_for_socket(fixture.socket());
+
+    let mut watch_stream = UnixStream::connect(fixture.socket()).expect("watch client connects");
+    write_working_request(
+        &mut watch_stream,
+        WatchHarnessTranscript {
+            harness: HarnessName::new("operator"),
+        }
+        .into(),
+    );
+    assert!(matches!(
+        read_working_event(&mut watch_stream),
+        HarnessEvent::HarnessTranscriptSnapshot(_)
+    ));
+
+    let token = HarnessTranscriptToken {
+        harness: HarnessName::new("operator"),
+    };
+    write_working_request(&mut watch_stream, token.clone().into());
+    let event = read_working_event(&mut watch_stream);
+
+    assert_eq!(
+        event,
+        HarnessEvent::HarnessSubscriptionRetracted(signal_harness::HarnessSubscriptionRetracted {
+            token
+        })
+    );
+}
+
+#[tokio::test]
+async fn harness_daemon_watch_transcript_stream_delivers_published_observation_and_final_ack() {
+    let fixture = SocketFixture::new("watch-transcript-stream");
+    let configuration =
+        DaemonConfigurationBuilder::new(&fixture).build(vec![fixture_instance("operator").build()]);
+    let engine = std::sync::Arc::new(HarnessEngine::from_configuration(configuration));
+    let (mut client_stream, mut server_stream) =
+        tokio::net::UnixStream::pair().expect("socket pair");
+    let server_engine = engine.clone();
+    let server = tokio::spawn(async move {
+        server_engine
+            .handle_working_stream(&mut server_stream)
+            .await
+            .expect("server handles transcript stream");
+    });
+
+    write_working_request_async(
+        &mut client_stream,
+        WatchHarnessTranscript {
+            harness: HarnessName::new("operator"),
+        }
+        .into(),
+    )
+    .await;
+    let snapshot = read_working_event_async(&mut client_stream).await;
+    assert!(matches!(
+        snapshot,
+        HarnessEvent::HarnessTranscriptSnapshot(_)
+    ));
+
+    let receipt = engine
+        .publish_transcript_observation(TranscriptObservation {
+            harness: HarnessName::new("operator"),
+            sequence: HarnessTranscriptSequence::new(1),
+            line: "ready".to_string(),
+        })
+        .await
+        .expect("publish transcript observation");
+    assert!(receipt.published);
+    assert_eq!(receipt.fanned_out, 1);
+
+    let event = read_working_stream_event_async(&mut client_stream).await;
+    assert_eq!(
+        event,
+        HarnessStreamEvent::TranscriptObservation(TranscriptObservation {
+            harness: HarnessName::new("operator"),
+            sequence: HarnessTranscriptSequence::new(1),
+            line: "ready".to_string(),
+        })
+    );
+
+    let token = HarnessTranscriptToken {
+        harness: HarnessName::new("operator"),
+    };
+    write_working_request_async(&mut client_stream, token.clone().into()).await;
+    let final_ack = read_working_event_async(&mut client_stream).await;
+    assert_eq!(
+        final_ack,
+        HarnessEvent::HarnessSubscriptionRetracted(signal_harness::HarnessSubscriptionRetracted {
+            token
+        })
+    );
+
+    server.await.expect("server task joins");
+}
+
+#[tokio::test]
+async fn harness_daemon_rejects_nested_watch_without_leaking_subscription() {
+    let fixture = SocketFixture::new("nested-watch-transcript-stream");
+    let configuration =
+        DaemonConfigurationBuilder::new(&fixture).build(vec![fixture_instance("operator").build()]);
+    let engine = std::sync::Arc::new(HarnessEngine::from_configuration(configuration));
+    let (mut client_stream, mut server_stream) =
+        tokio::net::UnixStream::pair().expect("socket pair");
+    let server_engine = engine.clone();
+    let server = tokio::spawn(async move {
+        server_engine
+            .handle_working_stream(&mut server_stream)
+            .await
+            .expect("server handles transcript stream");
+    });
+
+    write_working_request_async(
+        &mut client_stream,
+        WatchHarnessTranscript {
+            harness: HarnessName::new("operator"),
+        }
+        .into(),
+    )
+    .await;
+    assert!(matches!(
+        read_working_event_async(&mut client_stream).await,
+        HarnessEvent::HarnessTranscriptSnapshot(_)
+    ));
+
+    write_working_request_async(
+        &mut client_stream,
+        WatchHarnessTranscript {
+            harness: HarnessName::new("operator"),
+        }
+        .into(),
+    )
+    .await;
+    assert_eq!(
+        read_working_event_async(&mut client_stream).await,
+        HarnessEvent::HarnessRequestUnimplemented(HarnessRequestUnimplemented {
+            harness: HarnessName::new("operator"),
+            operation: HarnessOperationKind::WatchHarnessTranscript,
+            reason: HarnessUnimplementedReason::NotBuiltYet,
+        })
+    );
+
+    let receipt = engine
+        .publish_transcript_observation(TranscriptObservation {
+            harness: HarnessName::new("operator"),
+            sequence: HarnessTranscriptSequence::new(1),
+            line: "first".to_string(),
+        })
+        .await
+        .expect("publish transcript observation");
+    assert!(receipt.published);
+    assert_eq!(
+        receipt.fanned_out, 1,
+        "nested watch must not create a second unreachable subscription"
+    );
+    assert_eq!(
+        read_working_stream_event_async(&mut client_stream).await,
+        HarnessStreamEvent::TranscriptObservation(TranscriptObservation {
+            harness: HarnessName::new("operator"),
+            sequence: HarnessTranscriptSequence::new(1),
+            line: "first".to_string(),
+        })
+    );
+
+    let token = HarnessTranscriptToken {
+        harness: HarnessName::new("operator"),
+    };
+    write_working_request_async(&mut client_stream, token.clone().into()).await;
+    assert_eq!(
+        read_working_event_async(&mut client_stream).await,
+        HarnessEvent::HarnessSubscriptionRetracted(signal_harness::HarnessSubscriptionRetracted {
+            token
+        })
+    );
+    server.await.expect("server task joins");
+
+    let receipt = engine
+        .publish_transcript_observation(TranscriptObservation {
+            harness: HarnessName::new("operator"),
+            sequence: HarnessTranscriptSequence::new(2),
+            line: "after-close".to_string(),
+        })
+        .await
+        .expect("publish after close");
+    assert!(receipt.published);
+    assert_eq!(
+        receipt.fanned_out, 0,
+        "no unreachable nested subscription should remain after close"
+    );
+}
+
+#[test]
 fn harness_daemon_returns_typed_unimplemented() {
     let fixture = SocketFixture::new("unimplemented");
     let configuration_path = fixture.root.join("harness-daemon.rkyv");
@@ -832,6 +1064,54 @@ fn read_working_event(stream: &mut UnixStream) -> HarnessEvent {
             Reply::Rejected { reason } => panic!("expected harness event reply, got {reason:?}"),
         },
         other => panic!("expected harness event reply, got {other:?}"),
+    }
+}
+
+async fn write_working_request_async(stream: &mut tokio::net::UnixStream, request: HarnessRequest) {
+    let frame = HarnessFrame::new(HarnessFrameBody::Request {
+        exchange: test_exchange(),
+        request: Request::from_payload(request),
+    });
+    LengthPrefixedCodec::default()
+        .write_body_async(
+            stream,
+            &LengthPrefixedFrameBody::new(frame.encode().expect("harness request encodes")),
+        )
+        .await
+        .expect("write harness request");
+}
+
+async fn read_working_event_async(stream: &mut tokio::net::UnixStream) -> HarnessEvent {
+    let body = LengthPrefixedCodec::default()
+        .read_body_async(stream)
+        .await
+        .expect("event frame reads")
+        .into_bytes();
+    let frame = HarnessFrame::decode(&body).expect("event frame decodes");
+    match frame.into_body() {
+        HarnessFrameBody::Reply { reply, .. } => match reply {
+            Reply::Accepted { per_operation, .. } => match per_operation.into_head() {
+                SubReply::Ok(payload) => payload,
+                other => panic!("expected ok harness sub-reply, got {other:?}"),
+            },
+            Reply::Rejected { reason } => panic!("expected harness event reply, got {reason:?}"),
+        },
+        other => panic!("expected harness event reply, got {other:?}"),
+    }
+}
+
+async fn read_working_stream_event_async(
+    stream: &mut tokio::net::UnixStream,
+) -> HarnessStreamEvent {
+    let body = LengthPrefixedCodec::default()
+        .read_body_async(stream)
+        .await
+        .expect("stream event frame reads")
+        .into_bytes();
+    let frame = HarnessFrame::decode(&body).expect("stream event frame decodes");
+    match frame.into_body() {
+        HarnessFrameBody::SubscriptionEvent { event, .. } => event,
+        other => panic!("expected harness stream event, got {other:?}"),
     }
 }
 

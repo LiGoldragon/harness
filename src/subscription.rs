@@ -30,6 +30,7 @@ use signal_harness::{
     HarnessTranscriptSnapshot, HarnessTranscriptToken, TranscriptObservation,
 };
 use std::sync::Mutex;
+use tokio::sync::mpsc::UnboundedSender;
 
 /// One delta event emitted on a `HarnessTranscriptStream`.
 /// The publisher hands these to every handler; each handler
@@ -71,7 +72,13 @@ pub struct PublishTranscriptObservation {
 /// replace this with a real socket-writer actor.
 #[derive(Debug, Clone)]
 pub struct TranscriptSubscriptionSink {
-    inner: Arc<Mutex<TranscriptSubscriptionSinkInner>>,
+    target: TranscriptSubscriptionSinkTarget,
+}
+
+#[derive(Debug, Clone)]
+enum TranscriptSubscriptionSinkTarget {
+    Memory(Arc<Mutex<TranscriptSubscriptionSinkInner>>),
+    Channel(UnboundedSender<TranscriptDeliveryEvent>),
 }
 
 #[derive(Debug)]
@@ -99,13 +106,62 @@ impl TranscriptSubscriptionSink {
     /// owns).
     pub fn new() -> Self {
         Self {
-            inner: Arc::new(Mutex::new(TranscriptSubscriptionSinkInner {
-                delivered: VecDeque::new(),
-                delivered_count: 0,
-                closed_with_ack: false,
-                pending_acceptance: usize::MAX,
-            })),
+            target: TranscriptSubscriptionSinkTarget::Memory(Self::memory_inner_with_acceptance(
+                usize::MAX,
+            )),
         }
+    }
+
+    /// Build a sink that forwards delivery events to a daemon-owned
+    /// writer task. The subscription actors still own event ordering and
+    /// final-ack emission; the daemon writes each event onto the accepted
+    /// stream.
+    pub fn channel(sender: UnboundedSender<TranscriptDeliveryEvent>) -> Self {
+        Self {
+            target: TranscriptSubscriptionSinkTarget::Channel(sender),
+        }
+    }
+
+    fn memory_inner_with_acceptance(
+        pending_acceptance: usize,
+    ) -> Arc<Mutex<TranscriptSubscriptionSinkInner>> {
+        Arc::new(Mutex::new(TranscriptSubscriptionSinkInner {
+            delivered: VecDeque::new(),
+            delivered_count: 0,
+            closed_with_ack: false,
+            pending_acceptance,
+        }))
+    }
+
+    fn memory_inner(&self) -> Option<&Arc<Mutex<TranscriptSubscriptionSinkInner>>> {
+        match &self.target {
+            TranscriptSubscriptionSinkTarget::Memory(inner) => Some(inner),
+            TranscriptSubscriptionSinkTarget::Channel(_) => None,
+        }
+    }
+
+    fn read_memory_inner<Output>(
+        &self,
+        default: Output,
+        operation: impl FnOnce(&TranscriptSubscriptionSinkInner) -> Output,
+    ) -> Output {
+        let Some(inner) = self.memory_inner() else {
+            return default;
+        };
+        let inner = inner.lock().expect("transcript subscription sink lock");
+        operation(&inner)
+    }
+
+    fn with_memory_inner<Output>(
+        &self,
+        default: Output,
+        operation: impl FnOnce(&mut TranscriptSubscriptionSinkInner) -> Output,
+    ) -> Output {
+        let Some(inner) = self.memory_inner() else {
+            return default;
+        };
+        let mut inner = inner.lock().expect("transcript subscription sink lock");
+        operation(&mut inner)
     }
 
     /// Build a sink with a bounded acceptance capacity. The
@@ -113,77 +169,63 @@ impl TranscriptSubscriptionSink {
     /// pending-acceptance count drops to zero; the consumer
     /// raises it again by acknowledging delivered events.
     pub fn with_acceptance(initial_capacity: usize) -> Self {
-        let mut sink = Self::new();
-        sink.inner = Arc::new(Mutex::new(TranscriptSubscriptionSinkInner {
-            delivered: VecDeque::new(),
-            delivered_count: 0,
-            closed_with_ack: false,
-            pending_acceptance: initial_capacity,
-        }));
-        sink
+        Self {
+            target: TranscriptSubscriptionSinkTarget::Memory(Self::memory_inner_with_acceptance(
+                initial_capacity,
+            )),
+        }
     }
 
     /// Drain the next delivered event. Returns `None` when no
     /// event has arrived yet; tests poll until an event lands.
     pub fn next_delivered(&self) -> Option<TranscriptDeliveryEvent> {
-        self.inner
-            .lock()
-            .expect("transcript subscription sink lock")
-            .delivered
-            .pop_front()
+        self.with_memory_inner(None, |inner| inner.delivered.pop_front())
     }
 
     /// Number of events the sink has accepted from its handler.
     pub fn delivered_count(&self) -> u64 {
-        self.inner
-            .lock()
-            .expect("transcript subscription sink lock")
-            .delivered_count
+        self.read_memory_inner(0, |inner| inner.delivered_count)
     }
 
     /// Whether the sink has observed the final retraction ack.
     pub fn closed_with_ack(&self) -> bool {
-        self.inner
-            .lock()
-            .expect("transcript subscription sink lock")
-            .closed_with_ack
+        self.read_memory_inner(false, |inner| inner.closed_with_ack)
     }
 
     /// Number of additional events the sink is willing to
     /// accept. The handler reads this between pushes.
     pub fn pending_acceptance(&self) -> usize {
-        self.inner
-            .lock()
-            .expect("transcript subscription sink lock")
-            .pending_acceptance
+        self.read_memory_inner(usize::MAX, |inner| inner.pending_acceptance)
     }
 
     /// Consumer acknowledges that it has processed
     /// `additional` events; the handler may push that many
     /// more.
     pub fn accept_additional(&self, additional: usize) {
-        let mut inner = self
-            .inner
-            .lock()
-            .expect("transcript subscription sink lock");
-        inner.pending_acceptance = inner.pending_acceptance.saturating_add(additional);
+        self.with_memory_inner((), |inner| {
+            inner.pending_acceptance = inner.pending_acceptance.saturating_add(additional);
+        });
     }
 
     fn try_push(&self, event: TranscriptDeliveryEvent) -> Result<(), TranscriptDeliveryEvent> {
-        let mut inner = self
-            .inner
-            .lock()
-            .expect("transcript subscription sink lock");
-        if inner.pending_acceptance == 0 {
-            return Err(event);
+        match &self.target {
+            TranscriptSubscriptionSinkTarget::Memory(inner) => {
+                let mut inner = inner.lock().expect("transcript subscription sink lock");
+                if inner.pending_acceptance == 0 {
+                    return Err(event);
+                }
+                inner.pending_acceptance = inner.pending_acceptance.saturating_sub(1);
+                if matches!(event, TranscriptDeliveryEvent::FinalAcknowledgement(_)) {
+                    inner.closed_with_ack = true;
+                }
+                inner.delivered.push_back(event);
+                inner.delivered_count = inner.delivered_count.saturating_add(1);
+                Ok(())
+            }
+            TranscriptSubscriptionSinkTarget::Channel(sender) => {
+                sender.send(event).map_err(|error| error.0)
+            }
         }
-        inner.pending_acceptance = inner.pending_acceptance.saturating_sub(1);
-        if matches!(event, TranscriptDeliveryEvent::FinalAcknowledgement(_)) {
-            inner.closed_with_ack = true;
-        }
-        inner.delivered.push_back(event);
-        inner.delivered_count = inner.delivered_count.saturating_add(1);
-        Ok(())
     }
 }
 
@@ -195,7 +237,17 @@ impl Default for TranscriptSubscriptionSink {
 
 impl PartialEq for TranscriptSubscriptionSink {
     fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.inner, &other.inner)
+        match (&self.target, &other.target) {
+            (
+                TranscriptSubscriptionSinkTarget::Memory(left),
+                TranscriptSubscriptionSinkTarget::Memory(right),
+            ) => Arc::ptr_eq(left, right),
+            (
+                TranscriptSubscriptionSinkTarget::Channel(left),
+                TranscriptSubscriptionSinkTarget::Channel(right),
+            ) => left.same_channel(right),
+            _ => false,
+        }
     }
 }
 
