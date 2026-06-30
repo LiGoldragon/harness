@@ -180,6 +180,14 @@ harness Sema file (e.g. `harness.sema`) through a harness-owned Sema layer
 backed by `sema-engine`. The harness actor sequences its own writes; no shared
 cross-component database.
 
+Per archived intent `hqg7`, the production shape is **one component daemon
+owning multiple harness instances internally** — one OS daemon per harness is
+too heavy for the intended design. Per-harness boundaries live as
+records/actors/adapters inside the harness daemon (one `Harness` mailbox-backed
+actor per live binding), not as separate component processes. The
+message-routing end-to-end witness reflects this: a single `harness-daemon`
+process owns both harness instances in the round trip.
+
 ## 3 · Boundaries
 
 This repo owns:
@@ -202,6 +210,17 @@ This repo does not own:
 - the top-level engine-management contract (`signal-engine-management`);
 - Pi's internal model/runtime implementation;
 - database write ownership for other components' Sema layers.
+
+### 3.1 · Reliability and browser-automation notes (archived intent)
+
+- **Compaction-abort reliability (`eo25`).** Pi harness aborts around
+  compaction are a recurring reliability problem, not isolated one-offs.
+  Future investigations should treat stop-after-compaction symptoms as harness
+  bug candidates unless a user or manual abort is confirmed.
+- **Browser-automation attach-to-visible-tab (`s8lq`).** Browser automation for
+  real user accounts should support attaching to a visible browser tab/session
+  so the human can watch, intervene, and keep login/2FA secrets out of agent
+  prompts and logs.
 
 ## 4 · Invariants
 
