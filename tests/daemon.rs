@@ -847,6 +847,100 @@ async fn harness_daemon_allows_nested_watchers_for_same_harness_without_cross_cl
     assert_eq!(receipt.fanned_out, 0);
 }
 
+#[tokio::test]
+async fn harness_daemon_rejects_cross_harness_nested_watch_without_leaking_subscription() {
+    let fixture = SocketFixture::new("cross-harness-nested-watch");
+    let configuration = DaemonConfigurationBuilder::new(&fixture).build(vec![
+        fixture_instance("operator").build(),
+        fixture_instance("designer").build(),
+    ]);
+    let engine = std::sync::Arc::new(HarnessEngine::from_configuration(configuration));
+    let (mut client_stream, mut server_stream) =
+        tokio::net::UnixStream::pair().expect("socket pair");
+    let server_engine = engine.clone();
+    let server = tokio::spawn(async move {
+        server_engine
+            .handle_working_stream(&mut server_stream)
+            .await
+            .expect("server handles transcript stream");
+    });
+
+    write_working_request_async(
+        &mut client_stream,
+        WatchHarnessTranscript {
+            harness: HarnessName::new("operator"),
+        }
+        .into(),
+    )
+    .await;
+    let operator_token =
+        transcript_snapshot_token(read_working_event_async(&mut client_stream).await);
+
+    write_working_request_async(
+        &mut client_stream,
+        WatchHarnessTranscript {
+            harness: HarnessName::new("designer"),
+        }
+        .into(),
+    )
+    .await;
+    assert_eq!(
+        read_working_event_async(&mut client_stream).await,
+        HarnessEvent::HarnessRequestUnimplemented(HarnessRequestUnimplemented {
+            harness: HarnessName::new("designer"),
+            operation: HarnessOperationKind::WatchHarnessTranscript,
+            reason: HarnessUnimplementedReason::NotBuiltYet,
+        })
+    );
+
+    let operator_receipt = engine
+        .publish_transcript_observation(TranscriptObservation {
+            harness: HarnessName::new("operator"),
+            sequence: HarnessTranscriptSequence::new(1),
+            line: "operator-only".to_string(),
+        })
+        .await
+        .expect("publish operator transcript observation");
+    assert!(operator_receipt.published);
+    assert_eq!(
+        operator_receipt.fanned_out, 1,
+        "cross-harness nested watch must not create a second subscription in the bound manager"
+    );
+
+    let event = read_working_stream_event_async(&mut client_stream).await;
+    assert_eq!(
+        event,
+        HarnessStreamEvent::TranscriptObservation(TranscriptObservation {
+            harness: HarnessName::new("operator"),
+            sequence: HarnessTranscriptSequence::new(1),
+            line: "operator-only".to_string(),
+        })
+    );
+
+    let designer_receipt = engine
+        .publish_transcript_observation(TranscriptObservation {
+            harness: HarnessName::new("designer"),
+            sequence: HarnessTranscriptSequence::new(1),
+            line: "designer-not-subscribed".to_string(),
+        })
+        .await
+        .expect("publish designer transcript observation");
+    assert!(designer_receipt.published);
+    assert_eq!(
+        designer_receipt.fanned_out, 0,
+        "rejected cross-harness watch must not subscribe the requested harness either"
+    );
+
+    write_working_request_async(&mut client_stream, operator_token.clone().into()).await;
+    assert_eq!(
+        read_working_event_async(&mut client_stream).await,
+        HarnessEvent::HarnessSubscriptionRetracted(signal_harness::HarnessSubscriptionRetracted {
+            token: operator_token,
+        })
+    );
+    server.await.expect("server task joins");
+}
+
 #[test]
 fn harness_daemon_returns_typed_unimplemented() {
     let fixture = SocketFixture::new("unimplemented");

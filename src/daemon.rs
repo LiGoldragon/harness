@@ -150,7 +150,7 @@ impl HarnessEngine {
             .write(stream)
             .await;
         };
-        let mut transcript_stream = HarnessTranscriptWireStream::new();
+        let mut transcript_stream = HarnessTranscriptWireStream::new(harness);
         transcript_stream
             .open_subscription(exchange, watch, &instance)
             .await?;
@@ -706,6 +706,7 @@ impl WorkingHarnessEvent {
 }
 
 struct HarnessTranscriptWireStream {
+    bound_harness: HarnessName,
     sender: mpsc::UnboundedSender<TranscriptWireDelivery>,
     receiver: mpsc::UnboundedReceiver<TranscriptWireDelivery>,
     subscriptions: Vec<HarnessTranscriptWireSubscription>,
@@ -774,9 +775,10 @@ impl TranscriptDeliveryForwarder {
 }
 
 impl HarnessTranscriptWireStream {
-    fn new() -> Self {
+    fn new(bound_harness: HarnessName) -> Self {
         let (sender, receiver) = mpsc::unbounded_channel();
         Self {
+            bound_harness,
             sender,
             receiver,
             subscriptions: Vec::new(),
@@ -840,6 +842,15 @@ impl HarnessTranscriptWireStream {
         HarnessRequestUnimplemented {
             harness: token.harness,
             operation: HarnessOperationKind::UnwatchHarnessTranscript,
+            reason: HarnessUnimplementedReason::NotBuiltYet,
+        }
+        .into()
+    }
+
+    fn cross_harness_watch_event(watch: signal_harness::WatchHarnessTranscript) -> HarnessEvent {
+        HarnessRequestUnimplemented {
+            harness: watch.harness,
+            operation: HarnessOperationKind::WatchHarnessTranscript,
             reason: HarnessUnimplementedReason::NotBuiltYet,
         }
         .into()
@@ -919,6 +930,13 @@ impl HarnessTranscriptWireStream {
             }
             HarnessRequest::UnwatchHarnessTranscript(token) => {
                 WorkingHarnessEvent::new(received.exchange, Self::unknown_unwatch_event(token))
+                    .write(writer)
+                    .await
+            }
+            HarnessRequest::WatchHarnessTranscript(watch)
+                if watch.harness != self.bound_harness =>
+            {
+                WorkingHarnessEvent::new(received.exchange, Self::cross_harness_watch_event(watch))
                     .write(writer)
                     .await
             }
