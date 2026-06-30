@@ -3,7 +3,11 @@
 *Harness identity, lifecycle, transcript, and adapter contracts.*
 
 `harness` models interactive AI harnesses as addressable runtime
-objects. `HarnessKind` is the closed four-variant schema — production
+objects. It owns the reusable abstraction for Codex, Claude, and Pi
+harnesses; it does not own routing policy, OS/window focus observation,
+or terminal PTY byte transport. Today's harness is a realization step on
+the eventually-self-hosting stack, built rightly for the scope it serves
+now. `HarnessKind` is the closed four-variant schema — production
 variants `Codex`, `Claude`, `Pi`, and the explicit `Fixture` variant for
 test harnesses. Later production harnesses become explicit variants, not
 `Other { name }` string payloads. Harnesses carry lifecycle state, typed
