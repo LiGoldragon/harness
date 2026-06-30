@@ -23,8 +23,8 @@ use meta_signal_harness::{
     RequestUnimplemented, UnimplementedReason,
 };
 use signal_frame::{
-    ExchangeIdentifier, ExchangeLane, LaneSequence, NonEmpty, Reply, StreamEventIdentifier,
-    SubReply, SubscriptionTokenInner,
+    ExchangeIdentifier, ExchangeLane, LaneSequence, NonEmpty, Reply, SessionEpoch,
+    StreamEventIdentifier, SubReply, SubscriptionTokenInner,
 };
 use signal_harness::{
     DeliveryCompleted, DeliveryFailed, DeliveryFailureReason, HarnessDaemonConfiguration,
@@ -150,15 +150,11 @@ impl HarnessEngine {
             .write(stream)
             .await;
         };
-        let (sender, receiver) = mpsc::unbounded_channel();
-        let sink = TranscriptSubscriptionSink::channel(sender);
-        let opened = instance
-            .ask(OpenHarnessTranscriptStream { watch, sink })
-            .await
-            .map_err(|error| Error::ActorCall(error.to_string()))?;
-        HarnessTranscriptWireStream::new(exchange, opened.token, receiver)
-            .serve(stream, instance)
-            .await
+        let mut transcript_stream = HarnessTranscriptWireStream::new();
+        transcript_stream
+            .open_subscription(exchange, watch, &instance)
+            .await?;
+        transcript_stream.serve(stream, instance).await
     }
 
     pub async fn publish_transcript_observation(
@@ -710,26 +706,149 @@ impl WorkingHarnessEvent {
 }
 
 struct HarnessTranscriptWireStream {
-    watch_exchange: ExchangeIdentifier,
-    close_exchange: Option<ExchangeIdentifier>,
-    token: signal_harness::HarnessTranscriptToken,
-    receiver: mpsc::UnboundedReceiver<TranscriptDeliveryEvent>,
+    sender: mpsc::UnboundedSender<TranscriptWireDelivery>,
+    receiver: mpsc::UnboundedReceiver<TranscriptWireDelivery>,
+    subscriptions: Vec<HarnessTranscriptWireSubscription>,
     next_event_sequence: LaneSequence,
 }
 
-impl HarnessTranscriptWireStream {
+struct HarnessTranscriptWireSubscription {
+    token: signal_harness::HarnessTranscriptToken,
+    watch_exchange: ExchangeIdentifier,
+    close_exchange: Option<ExchangeIdentifier>,
+}
+
+struct TranscriptWireDelivery {
+    token: signal_harness::HarnessTranscriptToken,
+    event: TranscriptDeliveryEvent,
+}
+
+impl TranscriptWireDelivery {
+    fn final_ack(&self) -> bool {
+        matches!(self.event, TranscriptDeliveryEvent::FinalAcknowledgement(_))
+    }
+}
+
+impl HarnessTranscriptWireSubscription {
     fn new(
-        watch_exchange: ExchangeIdentifier,
         token: signal_harness::HarnessTranscriptToken,
-        receiver: mpsc::UnboundedReceiver<TranscriptDeliveryEvent>,
+        watch_exchange: ExchangeIdentifier,
     ) -> Self {
         Self {
+            token,
             watch_exchange,
             close_exchange: None,
-            token,
+        }
+    }
+}
+
+struct TranscriptDeliveryForwarder {
+    sender: mpsc::UnboundedSender<TranscriptWireDelivery>,
+}
+
+impl TranscriptDeliveryForwarder {
+    fn new(sender: mpsc::UnboundedSender<TranscriptWireDelivery>) -> Self {
+        Self { sender }
+    }
+
+    fn spawn(
+        self,
+        token: signal_harness::HarnessTranscriptToken,
+        mut receiver: mpsc::UnboundedReceiver<TranscriptDeliveryEvent>,
+    ) {
+        let sender = self.sender;
+        let _forwarder = tokio::spawn(async move {
+            while let Some(event) = receiver.recv().await {
+                if sender
+                    .send(TranscriptWireDelivery {
+                        token: token.clone(),
+                        event,
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+    }
+}
+
+impl HarnessTranscriptWireStream {
+    fn new() -> Self {
+        let (sender, receiver) = mpsc::unbounded_channel();
+        Self {
+            sender,
             receiver,
+            subscriptions: Vec::new(),
             next_event_sequence: LaneSequence::first(),
         }
+    }
+
+    async fn open_subscription(
+        &mut self,
+        exchange: ExchangeIdentifier,
+        watch: signal_harness::WatchHarnessTranscript,
+        instance: &ActorRef<HarnessInstance>,
+    ) -> Result<()> {
+        let (sender, receiver) = mpsc::unbounded_channel();
+        let sink = TranscriptSubscriptionSink::channel(sender);
+        let opened = instance
+            .ask(OpenHarnessTranscriptStream { watch, sink })
+            .await
+            .map_err(|error| Error::ActorCall(error.to_string()))?;
+        let token = opened.token.clone();
+        self.subscriptions
+            .push(HarnessTranscriptWireSubscription::new(
+                token.clone(),
+                exchange,
+            ));
+        TranscriptDeliveryForwarder::new(self.sender.clone()).spawn(token, receiver);
+        Ok(())
+    }
+
+    fn subscription(
+        &self,
+        token: &signal_harness::HarnessTranscriptToken,
+    ) -> Option<&HarnessTranscriptWireSubscription> {
+        self.subscriptions
+            .iter()
+            .find(|subscription| subscription.token == *token)
+    }
+
+    fn subscription_mut(
+        &mut self,
+        token: &signal_harness::HarnessTranscriptToken,
+    ) -> Option<&mut HarnessTranscriptWireSubscription> {
+        self.subscriptions
+            .iter_mut()
+            .find(|subscription| subscription.token == *token)
+    }
+
+    fn remove_subscription(&mut self, token: &signal_harness::HarnessTranscriptToken) {
+        self.subscriptions
+            .retain(|subscription| subscription.token != *token);
+    }
+
+    fn tokens(&self) -> Vec<signal_harness::HarnessTranscriptToken> {
+        self.subscriptions
+            .iter()
+            .map(|subscription| subscription.token.clone())
+            .collect()
+    }
+
+    fn unknown_unwatch_event(token: signal_harness::HarnessTranscriptToken) -> HarnessEvent {
+        HarnessRequestUnimplemented {
+            harness: token.harness,
+            operation: HarnessOperationKind::UnwatchHarnessTranscript,
+            reason: HarnessUnimplementedReason::NotBuiltYet,
+        }
+        .into()
+    }
+
+    fn subscription_token_inner(
+        token: &signal_harness::HarnessTranscriptToken,
+    ) -> SubscriptionTokenInner {
+        SubscriptionTokenInner::new(token.subscription.into_u64())
     }
 
     async fn serve(
@@ -742,16 +861,20 @@ impl HarnessTranscriptWireStream {
         loop {
             tokio::select! {
                 event = self.receiver.recv() => {
-                    let Some(event) = event else {
+                    let Some(delivery) = event else {
                         return Ok(());
                     };
-                    let final_ack = matches!(event, TranscriptDeliveryEvent::FinalAcknowledgement(_));
-                    if let Err(error) = self.write_delivery_event(&mut writer, event).await {
+                    let final_ack = delivery.final_ack();
+                    let token = delivery.token.clone();
+                    if let Err(error) = self.write_delivery_event(&mut writer, delivery).await {
                         self.close_after_stream_error(&instance).await;
                         return Err(error);
                     }
                     if final_ack {
-                        return Ok(());
+                        self.remove_subscription(&token);
+                        if self.subscriptions.is_empty() {
+                            return Ok(());
+                        }
                     }
                 }
                 body = codec.read_body_async(&mut reader) => {
@@ -782,23 +905,25 @@ impl HarnessTranscriptWireStream {
         Writer: AsyncWrite + Unpin,
     {
         match received.request {
-            HarnessRequest::UnwatchHarnessTranscript(token) if token == self.token => {
-                self.close_exchange = Some(received.exchange);
+            HarnessRequest::UnwatchHarnessTranscript(token)
+                if self.subscription(&token).is_some() =>
+            {
+                if let Some(subscription) = self.subscription_mut(&token) {
+                    subscription.close_exchange = Some(received.exchange);
+                }
                 instance
                     .ask(CloseHarnessTranscriptStream { token })
                     .await
                     .map_err(|error| Error::ActorCall(error.to_string()))?;
                 Ok(())
             }
-            HarnessRequest::WatchHarnessTranscript(watch) => {
-                let event = HarnessRequestUnimplemented {
-                    harness: watch.harness,
-                    operation: HarnessOperationKind::WatchHarnessTranscript,
-                    reason: HarnessUnimplementedReason::NotBuiltYet,
-                }
-                .into();
-                WorkingHarnessEvent::new(received.exchange, event)
+            HarnessRequest::UnwatchHarnessTranscript(token) => {
+                WorkingHarnessEvent::new(received.exchange, Self::unknown_unwatch_event(token))
                     .write(writer)
+                    .await
+            }
+            HarnessRequest::WatchHarnessTranscript(watch) => {
+                self.open_subscription(received.exchange, watch, instance)
                     .await
             }
             request => {
@@ -816,22 +941,40 @@ impl HarnessTranscriptWireStream {
     async fn write_delivery_event<Writer>(
         &mut self,
         writer: &mut Writer,
-        event: TranscriptDeliveryEvent,
+        delivery: TranscriptWireDelivery,
     ) -> Result<()>
     where
         Writer: AsyncWrite + Unpin,
     {
-        match event {
+        match delivery.event {
             TranscriptDeliveryEvent::Snapshot(snapshot) => {
-                WorkingHarnessEvent::new(self.watch_exchange, snapshot.into())
+                let exchange = self
+                    .subscription(&delivery.token)
+                    .map(|subscription| subscription.watch_exchange)
+                    .ok_or_else(|| Error::UnexpectedSignalFrame {
+                        got: "transcript snapshot did not match an open wire subscription"
+                            .to_string(),
+                    })?;
+                WorkingHarnessEvent::new(exchange, snapshot.into())
                     .write(writer)
                     .await
             }
             TranscriptDeliveryEvent::Delta(observation) => {
-                self.write_stream_event(writer, observation.into()).await
+                self.write_stream_event(writer, &delivery.token, observation.into())
+                    .await
             }
             TranscriptDeliveryEvent::FinalAcknowledgement(acknowledgement) => {
-                let exchange = self.close_exchange.unwrap_or(self.watch_exchange);
+                let exchange = self
+                    .subscription(&delivery.token)
+                    .map(|subscription| {
+                        subscription
+                            .close_exchange
+                            .unwrap_or(subscription.watch_exchange)
+                    })
+                    .ok_or_else(|| Error::UnexpectedSignalFrame {
+                        got: "transcript final ack did not match an open wire subscription"
+                            .to_string(),
+                    })?;
                 WorkingHarnessEvent::new(exchange, acknowledgement.into())
                     .write(writer)
                     .await
@@ -842,6 +985,7 @@ impl HarnessTranscriptWireStream {
     async fn write_stream_event<Writer>(
         &mut self,
         writer: &mut Writer,
+        token: &signal_harness::HarnessTranscriptToken,
         event: HarnessStreamEvent,
     ) -> Result<()>
     where
@@ -849,7 +993,7 @@ impl HarnessTranscriptWireStream {
     {
         let frame = HarnessFrame::new(FrameBody::SubscriptionEvent {
             event_identifier: self.next_stream_event_identifier(),
-            token: SubscriptionTokenInner::new(1),
+            token: Self::subscription_token_inner(token),
             event,
         });
         LengthPrefixedCodec::default()
@@ -860,8 +1004,13 @@ impl HarnessTranscriptWireStream {
     }
 
     fn next_stream_event_identifier(&mut self) -> StreamEventIdentifier {
+        let session_epoch = self
+            .subscriptions
+            .first()
+            .map(|subscription| subscription.watch_exchange.session_epoch)
+            .unwrap_or_else(|| SessionEpoch::new(0));
         let identifier = StreamEventIdentifier::new(
-            self.watch_exchange.session_epoch,
+            session_epoch,
             ExchangeLane::Acceptor,
             self.next_event_sequence,
         );
@@ -870,11 +1019,9 @@ impl HarnessTranscriptWireStream {
     }
 
     async fn close_after_stream_error(&self, instance: &ActorRef<HarnessInstance>) {
-        let _ = instance
-            .ask(CloseHarnessTranscriptStream {
-                token: self.token.clone(),
-            })
-            .await;
+        for token in self.tokens() {
+            let _ = instance.ask(CloseHarnessTranscriptStream { token }).await;
+        }
     }
 }
 

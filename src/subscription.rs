@@ -27,7 +27,8 @@ use kameo::error::Infallible;
 use kameo::message::{Context, Message};
 use signal_harness::{
     HarnessName, HarnessSubscriptionRetracted, HarnessTranscriptSequence,
-    HarnessTranscriptSnapshot, HarnessTranscriptToken, TranscriptObservation,
+    HarnessTranscriptSnapshot, HarnessTranscriptSubscriptionIdentifier, HarnessTranscriptToken,
+    TranscriptObservation,
 };
 use std::sync::Mutex;
 use tokio::sync::mpsc::UnboundedSender;
@@ -469,6 +470,7 @@ impl Message<ReadHandlerStatus> for TranscriptStreamingReplyHandler {
 #[derive(Debug)]
 pub struct TranscriptSubscriptionManager {
     open: Vec<TranscriptSubscriptionEntry>,
+    next_subscription_identifier: u64,
     opened_count: u64,
     closed_count: u64,
 }
@@ -483,6 +485,7 @@ impl TranscriptSubscriptionManager {
     pub fn new() -> Self {
         Self {
             open: Vec::new(),
+            next_subscription_identifier: 1,
             opened_count: 0,
             closed_count: 0,
         }
@@ -538,11 +541,15 @@ impl Message<OpenTranscriptSubscription> for TranscriptSubscriptionManager {
         message: OpenTranscriptSubscription,
         _context: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
+        let subscription =
+            HarnessTranscriptSubscriptionIdentifier::new(self.next_subscription_identifier);
+        self.next_subscription_identifier = self.next_subscription_identifier.saturating_add(1);
         let token = HarnessTranscriptToken {
             harness: message.harness.clone(),
+            subscription,
         };
         let snapshot = HarnessTranscriptSnapshot {
-            harness: message.harness,
+            token: token.clone(),
             current_sequence: HarnessTranscriptSequence::new(0),
         };
         let handler = TranscriptStreamingReplyHandler::spawn(TranscriptStreamingReplyHandler::new(

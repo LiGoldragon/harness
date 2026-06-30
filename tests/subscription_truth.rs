@@ -11,7 +11,8 @@ use harness::{
 };
 use kameo::actor::{ActorRef, Spawn};
 use signal_harness::{
-    HarnessName, HarnessTranscriptSequence, HarnessTranscriptToken, TranscriptObservation,
+    HarnessName, HarnessTranscriptSequence, HarnessTranscriptSubscriptionIdentifier,
+    HarnessTranscriptToken, TranscriptObservation,
 };
 
 struct SubscriptionFixture {
@@ -59,17 +60,18 @@ async fn subscription_open_returns_typed_snapshot_with_per_stream_token() {
         .await
         .expect("manager accepts open");
 
-    // The token names the harness; the snapshot carries the
-    // sequence cursor at 0.
+    // The token names the harness and the open subscription; the snapshot
+    // carries that token plus the sequence cursor at 0.
     assert_eq!(opened.token.harness.as_str(), "designer");
-    assert_eq!(opened.snapshot.harness.as_str(), "designer");
+    assert_eq!(opened.token.subscription.into_u64(), 1);
+    assert_eq!(opened.snapshot.token, opened.token);
     assert_eq!(opened.snapshot.current_sequence.into_u64(), 0);
 
     // The first event the sink received is the snapshot.
     let first = sink.next_delivered().expect("snapshot was delivered");
     match first {
         TranscriptDeliveryEvent::Snapshot(snapshot) => {
-            assert_eq!(snapshot.harness.as_str(), "designer");
+            assert_eq!(snapshot.token, opened.token);
             assert_eq!(snapshot.current_sequence.into_u64(), 0);
         }
         other => panic!("expected snapshot, got {other:?}"),
@@ -400,6 +402,7 @@ async fn unknown_token_close_reports_not_found() {
     let fixture = SubscriptionFixture::start().await;
     let phantom = HarnessTranscriptToken {
         harness: HarnessName::new("phantom"),
+        subscription: HarnessTranscriptSubscriptionIdentifier::new(9000),
     };
     let receipt = fixture
         .manager

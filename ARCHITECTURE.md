@@ -299,9 +299,10 @@ tests/                    harness smoke, daemon, CLI, and actor-runtime tests
 | Harness daemon recognizes the meta-harness policy contract before Persona supervision fallback. | `nix flake check .#harness-daemon-answers-meta-harness-relation` |
 | `harness` reaches the ordinary working socket and prints a typed reply. | `nix flake check .#harness-cli-reaches-working-socket` |
 | `meta-harness` reaches the owner/meta policy socket and prints a typed reply. | `nix flake check .#meta-harness-cli-reaches-policy-socket` |
-| Harness daemon opens a transcript subscription, returns a typed snapshot, and pushes typed deltas. | `nix flake check .#harness-daemon-pushes-transcript-deltas-after-subscribe` |
-| A subscriber receives the final `HarnessSubscriptionRetracted` ack carrying the same token before the stream ends. | `nix flake check .#harness-daemon-emits-final-subscription-retracted-ack` |
-| A slow subscriber does not stall transcript-delta delivery to a sibling subscription. | `nix flake check .#harness-daemon-slow-subscriber-does-not-block-siblings` |
+| Harness daemon opens a transcript subscription, returns a typed snapshot, and pushes typed deltas plus the final ack on the subscribed stream. | `nix build .#checks.<system>.harness-daemon-watch-transcript-stream-delivers-published-observation-and-final-ack` |
+| A subscriber receives the final `HarnessSubscriptionRetracted` ack carrying the same token before the stream ends. | `nix build .#checks.<system>.harness-daemon-unwatch-transcript-returns-final-retraction-ack-on-subscribed-stream` |
+| Multiple simultaneous watchers for the same harness receive independent stream frames, and closing one watcher does not close the other. | `nix build .#checks.<system>.harness-daemon-allows-nested-watchers-for-same-harness-without-cross-closing` |
+| A slow subscriber does not stall transcript-delta delivery to a sibling subscription. | `cargo test --test subscription_truth slow_subscriber_does_not_block_sibling_subscription` |
 | A real `message` CLI call reaches a second Pi-kind harness through real message/router daemons and one multi-instance harness daemon, the receiving endpoint replies through its own real `message` CLI and daemon, and the first harness receives the response. | `cargo test --test message_router_harness_e2e` |
 
 ## See Also

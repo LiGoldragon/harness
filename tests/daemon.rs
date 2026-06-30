@@ -28,6 +28,7 @@ use meta_signal_harness::{
 };
 use signal_frame::{
     ExchangeIdentifier, ExchangeLane, LaneSequence, Reply, Request, SessionEpoch, SubReply,
+    SubscriptionTokenInner,
 };
 use signal_harness::{
     DeliveryCompleted, DeliveryFailed, DeliveryFailureReason, HarnessDaemonConfiguration,
@@ -611,7 +612,8 @@ fn harness_daemon_watch_transcript_returns_typed_snapshot() {
 
     match event {
         HarnessEvent::HarnessTranscriptSnapshot(snapshot) => {
-            assert_eq!(snapshot.harness, HarnessName::new("operator"));
+            assert_eq!(snapshot.token.harness, HarnessName::new("operator"));
+            assert_eq!(snapshot.token.subscription.into_u64(), 1);
             assert_eq!(snapshot.current_sequence.into_u64(), 0);
         }
         other => panic!("expected transcript snapshot, got {other:?}"),
@@ -637,14 +639,8 @@ fn harness_daemon_unwatch_transcript_returns_final_retraction_ack_on_subscribed_
         }
         .into(),
     );
-    assert!(matches!(
-        read_working_event(&mut watch_stream),
-        HarnessEvent::HarnessTranscriptSnapshot(_)
-    ));
+    let token = transcript_snapshot_token(read_working_event(&mut watch_stream));
 
-    let token = HarnessTranscriptToken {
-        harness: HarnessName::new("operator"),
-    };
     write_working_request(&mut watch_stream, token.clone().into());
     let event = read_working_event(&mut watch_stream);
 
@@ -680,11 +676,7 @@ async fn harness_daemon_watch_transcript_stream_delivers_published_observation_a
         .into(),
     )
     .await;
-    let snapshot = read_working_event_async(&mut client_stream).await;
-    assert!(matches!(
-        snapshot,
-        HarnessEvent::HarnessTranscriptSnapshot(_)
-    ));
+    let token = transcript_snapshot_token(read_working_event_async(&mut client_stream).await);
 
     let receipt = engine
         .publish_transcript_observation(TranscriptObservation {
@@ -707,9 +699,6 @@ async fn harness_daemon_watch_transcript_stream_delivers_published_observation_a
         })
     );
 
-    let token = HarnessTranscriptToken {
-        harness: HarnessName::new("operator"),
-    };
     write_working_request_async(&mut client_stream, token.clone().into()).await;
     let final_ack = read_working_event_async(&mut client_stream).await;
     assert_eq!(
@@ -723,7 +712,7 @@ async fn harness_daemon_watch_transcript_stream_delivers_published_observation_a
 }
 
 #[tokio::test]
-async fn harness_daemon_rejects_nested_watch_without_leaking_subscription() {
+async fn harness_daemon_allows_nested_watchers_for_same_harness_without_cross_closing() {
     let fixture = SocketFixture::new("nested-watch-transcript-stream");
     let configuration =
         DaemonConfigurationBuilder::new(&fixture).build(vec![fixture_instance("operator").build()]);
@@ -746,10 +735,7 @@ async fn harness_daemon_rejects_nested_watch_without_leaking_subscription() {
         .into(),
     )
     .await;
-    assert!(matches!(
-        read_working_event_async(&mut client_stream).await,
-        HarnessEvent::HarnessTranscriptSnapshot(_)
-    ));
+    let first_token = transcript_snapshot_token(read_working_event_async(&mut client_stream).await);
 
     write_working_request_async(
         &mut client_stream,
@@ -759,14 +745,11 @@ async fn harness_daemon_rejects_nested_watch_without_leaking_subscription() {
         .into(),
     )
     .await;
-    assert_eq!(
-        read_working_event_async(&mut client_stream).await,
-        HarnessEvent::HarnessRequestUnimplemented(HarnessRequestUnimplemented {
-            harness: HarnessName::new("operator"),
-            operation: HarnessOperationKind::WatchHarnessTranscript,
-            reason: HarnessUnimplementedReason::NotBuiltYet,
-        })
-    );
+    let second_token =
+        transcript_snapshot_token(read_working_event_async(&mut client_stream).await);
+    assert_eq!(first_token.harness, HarnessName::new("operator"));
+    assert_eq!(second_token.harness, HarnessName::new("operator"));
+    assert_ne!(first_token, second_token);
 
     let receipt = engine
         .publish_transcript_observation(TranscriptObservation {
@@ -778,11 +761,29 @@ async fn harness_daemon_rejects_nested_watch_without_leaking_subscription() {
         .expect("publish transcript observation");
     assert!(receipt.published);
     assert_eq!(
-        receipt.fanned_out, 1,
-        "nested watch must not create a second unreachable subscription"
+        receipt.fanned_out, 2,
+        "both nested watchers should receive the first observation"
+    );
+
+    let first_delivery = read_working_stream_frame_async(&mut client_stream).await;
+    let second_delivery = read_working_stream_frame_async(&mut client_stream).await;
+    let delivered_tokens = vec![first_delivery.token, second_delivery.token];
+    assert!(delivered_tokens.contains(&SubscriptionTokenInner::new(
+        first_token.subscription.into_u64()
+    )));
+    assert!(delivered_tokens.contains(&SubscriptionTokenInner::new(
+        second_token.subscription.into_u64()
+    )));
+    assert_eq!(
+        first_delivery.event,
+        HarnessStreamEvent::TranscriptObservation(TranscriptObservation {
+            harness: HarnessName::new("operator"),
+            sequence: HarnessTranscriptSequence::new(1),
+            line: "first".to_string(),
+        })
     );
     assert_eq!(
-        read_working_stream_event_async(&mut client_stream).await,
+        second_delivery.event,
         HarnessStreamEvent::TranscriptObservation(TranscriptObservation {
             harness: HarnessName::new("operator"),
             sequence: HarnessTranscriptSequence::new(1),
@@ -790,14 +791,46 @@ async fn harness_daemon_rejects_nested_watch_without_leaking_subscription() {
         })
     );
 
-    let token = HarnessTranscriptToken {
-        harness: HarnessName::new("operator"),
-    };
-    write_working_request_async(&mut client_stream, token.clone().into()).await;
+    write_working_request_async(&mut client_stream, first_token.clone().into()).await;
     assert_eq!(
         read_working_event_async(&mut client_stream).await,
         HarnessEvent::HarnessSubscriptionRetracted(signal_harness::HarnessSubscriptionRetracted {
-            token
+            token: first_token.clone(),
+        })
+    );
+
+    let receipt = engine
+        .publish_transcript_observation(TranscriptObservation {
+            harness: HarnessName::new("operator"),
+            sequence: HarnessTranscriptSequence::new(2),
+            line: "second-only".to_string(),
+        })
+        .await
+        .expect("publish after first close");
+    assert!(receipt.published);
+    assert_eq!(
+        receipt.fanned_out, 1,
+        "closing the first watcher must not close the second"
+    );
+    let remaining_delivery = read_working_stream_frame_async(&mut client_stream).await;
+    assert_eq!(
+        remaining_delivery.token,
+        SubscriptionTokenInner::new(second_token.subscription.into_u64())
+    );
+    assert_eq!(
+        remaining_delivery.event,
+        HarnessStreamEvent::TranscriptObservation(TranscriptObservation {
+            harness: HarnessName::new("operator"),
+            sequence: HarnessTranscriptSequence::new(2),
+            line: "second-only".to_string(),
+        })
+    );
+
+    write_working_request_async(&mut client_stream, second_token.clone().into()).await;
+    assert_eq!(
+        read_working_event_async(&mut client_stream).await,
+        HarnessEvent::HarnessSubscriptionRetracted(signal_harness::HarnessSubscriptionRetracted {
+            token: second_token.clone(),
         })
     );
     server.await.expect("server task joins");
@@ -805,16 +838,13 @@ async fn harness_daemon_rejects_nested_watch_without_leaking_subscription() {
     let receipt = engine
         .publish_transcript_observation(TranscriptObservation {
             harness: HarnessName::new("operator"),
-            sequence: HarnessTranscriptSequence::new(2),
+            sequence: HarnessTranscriptSequence::new(3),
             line: "after-close".to_string(),
         })
         .await
-        .expect("publish after close");
+        .expect("publish after both close");
     assert!(receipt.published);
-    assert_eq!(
-        receipt.fanned_out, 0,
-        "no unreachable nested subscription should remain after close"
-    );
+    assert_eq!(receipt.fanned_out, 0);
 }
 
 #[test]
@@ -1100,9 +1130,28 @@ async fn read_working_event_async(stream: &mut tokio::net::UnixStream) -> Harnes
     }
 }
 
+fn transcript_snapshot_token(event: HarnessEvent) -> HarnessTranscriptToken {
+    match event {
+        HarnessEvent::HarnessTranscriptSnapshot(snapshot) => snapshot.token,
+        other => panic!("expected transcript snapshot, got {other:?}"),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReceivedWorkingStreamEvent {
+    token: SubscriptionTokenInner,
+    event: HarnessStreamEvent,
+}
+
 async fn read_working_stream_event_async(
     stream: &mut tokio::net::UnixStream,
 ) -> HarnessStreamEvent {
+    read_working_stream_frame_async(stream).await.event
+}
+
+async fn read_working_stream_frame_async(
+    stream: &mut tokio::net::UnixStream,
+) -> ReceivedWorkingStreamEvent {
     let body = LengthPrefixedCodec::default()
         .read_body_async(stream)
         .await
@@ -1110,7 +1159,9 @@ async fn read_working_stream_event_async(
         .into_bytes();
     let frame = HarnessFrame::decode(&body).expect("stream event frame decodes");
     match frame.into_body() {
-        HarnessFrameBody::SubscriptionEvent { event, .. } => event,
+        HarnessFrameBody::SubscriptionEvent { token, event, .. } => {
+            ReceivedWorkingStreamEvent { token, event }
+        }
         other => panic!("expected harness stream event, got {other:?}"),
     }
 }
