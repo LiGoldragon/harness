@@ -11,8 +11,9 @@
 //!   subscription; holds the per-stream cursor, the bounded
 //!   outbound buffer, the close-ack flag, and the consumer
 //!   sink.
-//! - `TranscriptDeltaPublisher` — fans `TranscriptObservation`
-//!   records out to every registered handler.
+//! - `TranscriptDeltaPublisher` — fans `HarnessStreamEvent`
+//!   records (both `TranscriptObservation` and
+//!   `ClaudeSessionObservation`) out to every registered handler.
 //!
 //! The publisher fans out by per-handler mailbox sends; one
 //! slow handler stalls only its own mailbox. No shared
@@ -26,19 +27,21 @@ use kameo::actor::{Actor, ActorRef, Spawn};
 use kameo::error::Infallible;
 use kameo::message::{Context, Message};
 use signal_harness::{
-    HarnessName, HarnessSubscriptionRetracted, HarnessTranscriptSequence,
+    HarnessName, HarnessStreamEvent, HarnessSubscriptionRetracted, HarnessTranscriptSequence,
     HarnessTranscriptSnapshot, HarnessTranscriptSubscriptionIdentifier, HarnessTranscriptToken,
-    TranscriptObservation,
 };
 use std::sync::Mutex;
 use tokio::sync::mpsc::UnboundedSender;
 
 /// One delta event emitted on a `HarnessTranscriptStream`.
 /// The publisher hands these to every handler; each handler
-/// forwards them to its consumer sink.
+/// forwards them to its consumer sink. The delta carries a
+/// `HarnessStreamEvent`, so both `TranscriptObservation` and
+/// `ClaudeSessionObservation` — the two events the contract
+/// declares on the stream — ride the same fan-out path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeliverTranscriptDelta {
-    pub observation: TranscriptObservation,
+    pub event: HarnessStreamEvent,
 }
 
 /// Open a subscription. The handler that responds carries the
@@ -57,11 +60,16 @@ pub struct CloseTranscriptSubscription {
     pub token: HarnessTranscriptToken,
 }
 
-/// One observation arrived from the `Harness` actor. The
-/// publisher fans it out to every open handler.
+/// One stream event arrived from the `Harness` runtime to be
+/// pushed onto every open subscription. It carries a
+/// `HarnessStreamEvent`, so a transcript line
+/// (`TranscriptObservation`) and a per-turn Claude session
+/// observation (`ClaudeSessionObservation`) enter the fan-out
+/// plane through the same message. The publisher fans it out to
+/// every open handler.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PublishTranscriptObservation {
-    pub observation: TranscriptObservation,
+pub struct PublishStreamEvent {
+    pub event: HarnessStreamEvent,
 }
 
 /// The consumer-facing sink. Each open subscription has its
@@ -96,7 +104,7 @@ struct TranscriptSubscriptionSinkInner {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TranscriptDeliveryEvent {
     Snapshot(HarnessTranscriptSnapshot),
-    Delta(TranscriptObservation),
+    Delta(HarnessStreamEvent),
     FinalAcknowledgement(HarnessSubscriptionRetracted),
 }
 
@@ -368,7 +376,7 @@ impl Message<DeliverTranscriptDelta> for TranscriptStreamingReplyHandler {
         }
         match self
             .sink
-            .try_push(TranscriptDeliveryEvent::Delta(message.observation))
+            .try_push(TranscriptDeliveryEvent::Delta(message.event))
         {
             Ok(()) => {
                 self.delivered_deltas = self.delivered_deltas.saturating_add(1);
@@ -662,8 +670,8 @@ impl Message<ReadSubscriptionHandlers> for TranscriptSubscriptionManager {
     }
 }
 
-/// The delta publisher. Receives `PublishTranscriptObservation`
-/// from the `Harness` actor and fans the observation out to
+/// The delta publisher. Receives `PublishStreamEvent`
+/// from the `Harness` runtime and fans the stream event out to
 /// every handler the manager has registered.
 #[derive(Debug)]
 pub struct TranscriptDeltaPublisher {
@@ -708,12 +716,12 @@ pub struct TranscriptPublicationReceipt {
     pub fanned_out: usize,
 }
 
-impl Message<PublishTranscriptObservation> for TranscriptDeltaPublisher {
+impl Message<PublishStreamEvent> for TranscriptDeltaPublisher {
     type Reply = TranscriptPublicationReceipt;
 
     async fn handle(
         &mut self,
-        message: PublishTranscriptObservation,
+        message: PublishStreamEvent,
         _context: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.published_count = self.published_count.saturating_add(1);
@@ -725,7 +733,7 @@ impl Message<PublishTranscriptObservation> for TranscriptDeltaPublisher {
         for handler in handlers {
             let receipt = handler
                 .ask(DeliverTranscriptDelta {
-                    observation: message.observation.clone(),
+                    event: message.event.clone(),
                 })
                 .await;
             if let Ok(receipt) = receipt

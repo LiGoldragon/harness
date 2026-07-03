@@ -124,6 +124,8 @@
           harness-daemon-watch-transcript-returns-typed-snapshot = context.cargoTest "daemon" "harness_daemon_watch_transcript_returns_typed_snapshot";
           harness-daemon-unwatch-transcript-returns-final-retraction-ack-on-subscribed-stream = context.cargoTest "daemon" "harness_daemon_unwatch_transcript_returns_final_retraction_ack_on_subscribed_stream";
           harness-daemon-watch-transcript-stream-delivers-published-observation-and-final-ack = context.cargoTest "daemon" "harness_daemon_watch_transcript_stream_delivers_published_observation_and_final_ack";
+          harness-observed-turn-projects-assistant-text-and-defers-accumulated-context = context.cargoTest "claude_session_observation" "observed_turn_projects_assistant_text_and_defers_accumulated_context";
+          harness-claude-session-observation-is-pushed-to-subscriber-without-polling = context.cargoTest "claude_session_stream" "claude_session_observation_is_pushed_to_subscriber_without_polling";
           harness-daemon-allows-nested-watchers-for-same-harness-without-cross-closing = context.cargoTest "daemon" "harness_daemon_allows_nested_watchers_for_same_harness_without_cross_closing";
           harness-daemon-rejects-cross-harness-nested-watch-without-leaking-subscription = context.cargoTest "daemon" "harness_daemon_rejects_cross_harness_nested_watch_without_leaking_subscription";
           harness-daemon-returns-typed-unimplemented = context.cargoTest "daemon" "harness_daemon_returns_typed_unimplemented";

@@ -27,11 +27,12 @@ use signal_frame::{
     StreamEventIdentifier, SubReply, SubscriptionTokenInner,
 };
 use signal_harness::{
-    DeliveryCompleted, DeliveryFailed, DeliveryFailureReason, HarnessDaemonConfiguration,
-    HarnessEvent, HarnessFrame, HarnessFrameBody as FrameBody, HarnessHealth,
-    HarnessInstanceConfiguration, HarnessName, HarnessOperationKind, HarnessReadiness,
-    HarnessRequest, HarnessRequestUnimplemented, HarnessStatus, HarnessStatusQuery,
-    HarnessStreamEvent, HarnessUnimplementedReason, MessageDelivery, TranscriptObservation,
+    ClaudeSessionObservation, DeliveryCompleted, DeliveryFailed, DeliveryFailureReason,
+    HarnessDaemonConfiguration, HarnessEvent, HarnessFrame, HarnessFrameBody as FrameBody,
+    HarnessHealth, HarnessInstanceConfiguration, HarnessName, HarnessOperationKind,
+    HarnessReadiness, HarnessRequest, HarnessRequestUnimplemented, HarnessStatus,
+    HarnessStatusQuery, HarnessStreamEvent, HarnessUnimplementedReason, MessageDelivery,
+    TranscriptObservation,
 };
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::OnceCell;
@@ -46,7 +47,7 @@ use crate::supervision::{
 };
 use crate::{
     CloseTranscriptSubscription, OpenTranscriptSubscription, OpenedTranscriptSubscription,
-    PublishTranscriptObservation, TranscriptDeliveryEvent, TranscriptDeltaPublisher,
+    PublishStreamEvent, TranscriptDeliveryEvent, TranscriptDeltaPublisher,
     TranscriptPublicationReceipt, TranscriptSubscriptionManager, TranscriptSubscriptionSink,
 };
 use crate::{
@@ -157,21 +158,44 @@ impl HarnessEngine {
         transcript_stream.serve(stream, instance).await
     }
 
+    /// Push one transcript line onto the addressed harness's stream.
     pub async fn publish_transcript_observation(
         &self,
         observation: TranscriptObservation,
     ) -> Result<TranscriptPublicationReceipt> {
         let harness = observation.harness.clone();
-        let Some(instance) = self.instances().await?.instance(&harness) else {
+        self.publish_stream_event(&harness, observation.into())
+            .await
+    }
+
+    /// Push one per-turn Claude session observation onto the addressed
+    /// harness's stream. It rides the same `HarnessTranscriptStream` as
+    /// transcript lines — the Mentci live view renders it, and orchestrate's
+    /// session store later consumes the same pushed event.
+    pub async fn publish_claude_session_observation(
+        &self,
+        observation: ClaudeSessionObservation,
+    ) -> Result<TranscriptPublicationReceipt> {
+        let harness = observation.harness.clone();
+        self.publish_stream_event(&harness, observation.into())
+            .await
+    }
+
+    async fn publish_stream_event(
+        &self,
+        harness: &HarnessName,
+        event: HarnessStreamEvent,
+    ) -> Result<TranscriptPublicationReceipt> {
+        let Some(instance) = self.instances().await?.instance(harness) else {
             return Ok(TranscriptPublicationReceipt {
                 published: false,
                 fanned_out: 0,
             });
         };
-        Ok(instance
-            .ask(PublishHarnessTranscriptObservation { observation })
+        instance
+            .ask(PublishHarnessStreamEvent { event })
             .await
-            .map_err(|error| Error::ActorCall(error.to_string()))?)
+            .map_err(|error| Error::ActorCall(error.to_string()))
     }
 
     async fn event_for_request(&self, request: HarnessRequest) -> Result<HarnessEvent> {
@@ -620,23 +644,27 @@ impl Message<CloseHarnessTranscriptStream> for HarnessInstance {
     }
 }
 
+/// Push one `HarnessStreamEvent` onto this instance's transcript stream. The
+/// carried event is either a `TranscriptObservation` (a transcript line) or a
+/// `ClaudeSessionObservation` (a per-turn Claude session observation); both
+/// ride the one fan-out plane the publisher owns.
 #[derive(Debug)]
-pub struct PublishHarnessTranscriptObservation {
-    pub observation: TranscriptObservation,
+pub struct PublishHarnessStreamEvent {
+    pub event: HarnessStreamEvent,
 }
 
-impl Message<PublishHarnessTranscriptObservation> for HarnessInstance {
+impl Message<PublishHarnessStreamEvent> for HarnessInstance {
     type Reply = Result<TranscriptPublicationReceipt>;
 
     async fn handle(
         &mut self,
-        message: PublishHarnessTranscriptObservation,
+        message: PublishHarnessStreamEvent,
         _context: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         let transcript_publisher = self.transcript_publisher.clone();
         transcript_publisher
-            .ask(PublishTranscriptObservation {
-                observation: message.observation,
+            .ask(PublishStreamEvent {
+                event: message.event,
             })
             .await
             .map_err(|error| Error::ActorCall(error.to_string()))
@@ -977,8 +1005,8 @@ impl HarnessTranscriptWireStream {
                     .write(writer)
                     .await
             }
-            TranscriptDeliveryEvent::Delta(observation) => {
-                self.write_stream_event(writer, &delivery.token, observation.into())
+            TranscriptDeliveryEvent::Delta(event) => {
+                self.write_stream_event(writer, &delivery.token, event)
                     .await
             }
             TranscriptDeliveryEvent::FinalAcknowledgement(acknowledgement) => {

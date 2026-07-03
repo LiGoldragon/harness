@@ -1,4 +1,5 @@
 pub mod claude;
+pub mod claude_session;
 pub mod cli_argument;
 pub mod client;
 pub mod command;
@@ -22,6 +23,7 @@ pub use claude::{
     ClaudeRecoveredTurn, ClaudeSessionArtifact, ClaudeStatusTransition, ClaudeToolCall,
     ClaudeToolResult,
 };
+pub use claude_session::ObservedClaudeTurn;
 pub use cli_argument::NotaCommandText;
 pub use client::{HarnessClient, HarnessCommandEnvironment, HarnessCommandLine, HarnessEndpoint};
 pub use command::HarnessDaemonConfigurationFile;
@@ -47,10 +49,10 @@ pub use schema::daemon::{ComponentDaemon, DaemonEntry};
 pub use subscription::{
     CloseTranscriptSubscription, ClosedTranscriptSubscription, DeliverSnapshot,
     DeliverTranscriptDelta, EmitFinalRetractionAck, OpenTranscriptSubscription,
-    OpenedTranscriptSubscription, PublishTranscriptObservation, ReadHandlerStatus,
-    ReadManagerStatus, ReadPublisherStatus, ReadSubscriptionHandlers, SubscriptionHandlers,
-    TranscriptDeliveryEvent, TranscriptDeliveryReceipt, TranscriptDeltaPublisher,
-    TranscriptDeltaPublisherStatus, TranscriptPublicationReceipt, TranscriptStreamingReplyHandler,
+    OpenedTranscriptSubscription, PublishStreamEvent, ReadHandlerStatus, ReadManagerStatus,
+    ReadPublisherStatus, ReadSubscriptionHandlers, SubscriptionHandlers, TranscriptDeliveryEvent,
+    TranscriptDeliveryReceipt, TranscriptDeltaPublisher, TranscriptDeltaPublisherStatus,
+    TranscriptPublicationReceipt, TranscriptStreamingReplyHandler,
     TranscriptStreamingReplyHandlerStatus, TranscriptSubscriptionManager,
     TranscriptSubscriptionManagerStatus, TranscriptSubscriptionSink,
 };

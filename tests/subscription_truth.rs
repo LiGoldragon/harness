@@ -5,14 +5,14 @@
 //! publisher) is the path the producer took.
 
 use harness::{
-    CloseTranscriptSubscription, OpenTranscriptSubscription, PublishTranscriptObservation,
-    ReadHandlerStatus, ReadManagerStatus, ReadPublisherStatus, TranscriptDeliveryEvent,
-    TranscriptDeltaPublisher, TranscriptSubscriptionManager, TranscriptSubscriptionSink,
+    CloseTranscriptSubscription, OpenTranscriptSubscription, PublishStreamEvent, ReadHandlerStatus,
+    ReadManagerStatus, ReadPublisherStatus, TranscriptDeliveryEvent, TranscriptDeltaPublisher,
+    TranscriptSubscriptionManager, TranscriptSubscriptionSink,
 };
 use kameo::actor::{ActorRef, Spawn};
 use signal_harness::{
-    HarnessName, HarnessTranscriptSequence, HarnessTranscriptSubscriptionIdentifier,
-    HarnessTranscriptToken, TranscriptObservation,
+    HarnessName, HarnessStreamEvent, HarnessTranscriptSequence,
+    HarnessTranscriptSubscriptionIdentifier, HarnessTranscriptToken, TranscriptObservation,
 };
 
 struct SubscriptionFixture {
@@ -112,8 +112,8 @@ async fn publisher_fans_typed_deltas_to_open_subscription() {
     for sequence in 1..=3 {
         let receipt = fixture
             .publisher
-            .ask(PublishTranscriptObservation {
-                observation: observation("designer", sequence, &format!("line {sequence}")),
+            .ask(PublishStreamEvent {
+                event: observation("designer", sequence, &format!("line {sequence}")).into(),
             })
             .await
             .expect("publish");
@@ -124,7 +124,9 @@ async fn publisher_fans_typed_deltas_to_open_subscription() {
     // The sink received exactly three deltas, in order.
     for sequence in 1..=3 {
         match sink.next_delivered() {
-            Some(TranscriptDeliveryEvent::Delta(observation)) => {
+            Some(TranscriptDeliveryEvent::Delta(HarnessStreamEvent::TranscriptObservation(
+                observation,
+            ))) => {
                 assert_eq!(observation.sequence.into_u64(), sequence);
                 assert_eq!(observation.line, format!("line {sequence}"));
             }
@@ -166,8 +168,8 @@ async fn subscription_close_emits_final_acknowledgement_before_end() {
     // Publish one delta.
     fixture
         .publisher
-        .ask(PublishTranscriptObservation {
-            observation: observation("operator", 1, "first"),
+        .ask(PublishStreamEvent {
+            event: observation("operator", 1, "first").into(),
         })
         .await
         .expect("publish");
@@ -226,8 +228,8 @@ async fn close_after_publish_drops_further_deltas_to_closed_subscription() {
     // Publish, close, then try to publish again.
     fixture
         .publisher
-        .ask(PublishTranscriptObservation {
-            observation: observation("designer", 1, "before-close"),
+        .ask(PublishStreamEvent {
+            event: observation("designer", 1, "before-close").into(),
         })
         .await
         .expect("publish");
@@ -243,8 +245,8 @@ async fn close_after_publish_drops_further_deltas_to_closed_subscription() {
     // publisher fanout finds zero handlers.
     let receipt = fixture
         .publisher
-        .ask(PublishTranscriptObservation {
-            observation: observation("designer", 2, "after-close"),
+        .ask(PublishStreamEvent {
+            event: observation("designer", 2, "after-close").into(),
         })
         .await
         .expect("publish");
@@ -304,8 +306,8 @@ async fn slow_subscriber_does_not_block_sibling_subscription() {
     for sequence in 1..=3 {
         let receipt = fixture
             .publisher
-            .ask(PublishTranscriptObservation {
-                observation: observation("multi", sequence, &format!("line {sequence}")),
+            .ask(PublishStreamEvent {
+                event: observation("multi", sequence, &format!("line {sequence}")).into(),
             })
             .await
             .expect("publish");
