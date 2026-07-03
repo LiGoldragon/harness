@@ -35,7 +35,7 @@ path = "src/bin/harness_claude_session_stream_test.rs"
 [dependencies]
 kameo                   = { git = "https://github.com/LiGoldragon/kameo.git", branch = "main", default-features = false, features = ["macros", "tracing"] }
 meta-signal-harness     = { git = "https://github.com/LiGoldragon/meta-signal-harness.git", branch = "main" }
-nota-next               = { package = "nota", git = "https://github.com/LiGoldragon/nota-next.git", branch = "main" }
+nota               = { package = "nota", git = "https://github.com/LiGoldragon/nota.git", branch = "main" }
 rkyv                    = { version = "0.8", default-features = false, features = ["std", "bytecheck", "little_endian", "pointer_width_32", "unaligned"] }
 signal-frame           = { git = "https://github.com/LiGoldragon/signal-frame.git", branch = "main" }
 signal-harness         = { git = "https://github.com/LiGoldragon/signal-harness.git", branch = "main" }
@@ -48,7 +48,7 @@ triad-runtime           = { git = "https://github.com/LiGoldragon/triad-runtime.
 notify = "8.2.0"
 
 [build-dependencies]
-schema-rust-next = { package = "schema-rust", git = "https://github.com/LiGoldragon/schema-rust-next.git", branch = "main" }
+schema-rust = { package = "schema-rust", git = "https://github.com/LiGoldragon/schema-rust.git", branch = "main" }
 
 [lints.rust]
 unsafe_code = "forbid"

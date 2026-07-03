@@ -8,7 +8,7 @@ use meta_signal_harness::{
     MetaHarnessFrame, MetaHarnessFrameBody, MetaHarnessReply, MetaHarnessRequest,
     RequestUnimplemented, UnimplementedReason,
 };
-use nota_next::NotaEncode;
+use nota::NotaEncode;
 use signal_frame::{NonEmpty, Reply, SubReply};
 use signal_harness::{
     HarnessDaemonConfiguration, HarnessEvent, HarnessFrame, HarnessFrameBody, HarnessHealth,

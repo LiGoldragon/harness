@@ -34,7 +34,7 @@ pub enum Error {
     },
 
     #[error("nota decode: {0}")]
-    Nota(#[from] nota_next::NotaDecodeError),
+    Nota(#[from] nota::NotaDecodeError),
 
     #[error("failed to read binary daemon configuration {path}: {source}")]
     ConfigurationRead {
