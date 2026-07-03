@@ -615,6 +615,10 @@ impl ClaudeJsonLine {
         JsonLookup::new(&self.value).strings_for_keys(&["text", "content", "stdout"])
     }
 
+    fn assistant_text_content(&self) -> Vec<String> {
+        JsonLookup::new(&self.value).text_block_strings()
+    }
+
     fn tool_calls(&self) -> Vec<ClaudeToolCall> {
         let mut calls = Vec::new();
         JsonLookup::new(&self.value).collect_tool_calls(self, &mut calls);
@@ -1138,6 +1142,19 @@ impl ClaudeRecoveredTurn {
         &self.status_transitions
     }
 
+    /// The assistant response text this turn already parsed from the
+    /// transcript, so consumers can source it directly instead of parsing
+    /// the Claude CLI `result` line. `None` when the turn observed no
+    /// assistant text; multiple assistant text fragments are joined with a
+    /// blank line, in observation order.
+    pub fn assistant_text(&self) -> Option<String> {
+        if self.assistant_text_fragments.is_empty() {
+            None
+        } else {
+            Some(self.assistant_text_fragments.join("\n\n"))
+        }
+    }
+
     pub fn contains_text(&self, needle: &str) -> bool {
         self.text_fragments
             .iter()
@@ -1197,7 +1214,7 @@ impl ClaudeRecoveredTurn {
         }
         if record.record_type() == Some("assistant") {
             self.assistant_text_fragments
-                .extend(text_fragments.iter().cloned());
+                .extend(record.assistant_text_content());
         }
         self.text_fragments.extend(text_fragments);
         self.tool_calls.extend(record.tool_calls());
@@ -1272,6 +1289,15 @@ impl<'a> JsonLookup<'a> {
         strings
     }
 
+    /// The text of every `{"type":"text","text":"..."}` content block found
+    /// anywhere in this value, skipping the `type` discriminator itself and
+    /// any sibling non-text content blocks (such as `tool_use` inputs).
+    fn text_block_strings(&self) -> Vec<String> {
+        let mut strings = Vec::new();
+        self.collect_text_block_strings(self.value, &mut strings);
+        strings
+    }
+
     fn contains_key_part(&self, needle: &str) -> bool {
         self.value_contains_key_part(self.value, needle)
     }
@@ -1320,6 +1346,28 @@ impl<'a> JsonLookup<'a> {
             Value::Array(array) => {
                 for child in array {
                     self.collect_strings_for_keys(child, keys, strings);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn collect_text_block_strings(&self, value: &Value, strings: &mut Vec<String>) {
+        match value {
+            Value::Object(map) => {
+                if map.get("type").and_then(Value::as_str) == Some("text") {
+                    if let Some(text) = map.get("text").and_then(Value::as_str) {
+                        strings.push(text.to_string());
+                    }
+                    return;
+                }
+                for child in map.values() {
+                    self.collect_text_block_strings(child, strings);
+                }
+            }
+            Value::Array(array) => {
+                for child in array {
+                    self.collect_text_block_strings(child, strings);
                 }
             }
             _ => {}

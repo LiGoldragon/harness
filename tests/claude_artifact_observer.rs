@@ -48,6 +48,28 @@ fn claude_artifact_observer_recovers_marked_turn_from_project_jsonl() {
 }
 
 #[test]
+fn claude_artifact_observer_recovered_turn_exposes_assistant_text() {
+    let fixture = ClaudeFixture::new("/tmp/claude-proof");
+    fixture.write_project_jsonl(
+        "session-alpha.jsonl",
+        &[
+            r#"{"type":"user","cwd":"/tmp/claude-proof","sessionId":"session-alpha","timestamp":"2026-06-28T10:00:00Z","message":{"role":"user","content":[{"type":"text","text":"PROMPT_MARKER say hello"}]}}"#,
+            r#"{"type":"assistant","cwd":"/tmp/claude-proof","sessionId":"session-alpha","timestamp":"2026-06-28T10:00:06Z","message":{"role":"assistant","model":"claude-3-5-haiku-latest","content":[{"type":"text","text":"FINAL_MARKER hello there"}],"stop_reason":"end_turn"}}"#,
+        ],
+    );
+
+    let snapshot = ClaudeArtifactObserver::with_home(fixture.home_directory(), "/tmp/claude-proof")
+        .snapshot()
+        .expect("snapshot recovers fixture");
+    let turn = snapshot.recovered_turn();
+
+    assert_eq!(
+        turn.assistant_text().as_deref(),
+        Some("FINAL_MARKER hello there")
+    );
+}
+
+#[test]
 fn claude_artifact_observer_can_filter_by_session_identifier() {
     let fixture = ClaudeFixture::new("/tmp/claude-proof");
     fixture.write_project_jsonl(
