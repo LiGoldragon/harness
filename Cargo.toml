@@ -34,21 +34,21 @@ path = "src/bin/harness_claude_session_stream_test.rs"
 
 [dependencies]
 kameo                   = { git = "https://github.com/LiGoldragon/kameo.git", branch = "main", default-features = false, features = ["macros", "tracing"] }
-meta-signal-harness     = { git = "https://github.com/LiGoldragon/meta-signal-harness.git", branch = "drop-next" }
+meta-signal-harness     = { git = "https://github.com/LiGoldragon/meta-signal-harness.git", branch = "main" }
 nota               = { package = "nota", git = "https://github.com/LiGoldragon/nota.git", branch = "main" }
 rkyv                    = { version = "0.8", default-features = false, features = ["std", "bytecheck", "little_endian", "pointer_width_32", "unaligned"] }
-signal-frame           = { git = "https://github.com/LiGoldragon/signal-frame.git", branch = "drop-next" }
-signal-harness         = { git = "https://github.com/LiGoldragon/signal-harness.git", branch = "drop-next" }
-signal-persona         = { git = "https://github.com/LiGoldragon/signal-persona.git", branch = "drop-next" }
-signal-terminal        = { git = "https://github.com/LiGoldragon/signal-terminal.git", branch = "drop-next" }
+signal-frame           = { git = "https://github.com/LiGoldragon/signal-frame.git", branch = "main" }
+signal-harness         = { git = "https://github.com/LiGoldragon/signal-harness.git", branch = "main" }
+signal-persona         = { git = "https://github.com/LiGoldragon/signal-persona.git", branch = "main" }
+signal-terminal        = { git = "https://github.com/LiGoldragon/signal-terminal.git", branch = "main" }
 serde_json              = "1"
 thiserror               = "2"
 tokio                   = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time"] }
-triad-runtime           = { git = "https://github.com/LiGoldragon/triad-runtime.git", branch = "drop-next" }
+triad-runtime           = { git = "https://github.com/LiGoldragon/triad-runtime.git", branch = "main" }
 notify = "8.2.0"
 
 [build-dependencies]
-schema-rust = { package = "schema-rust", git = "https://github.com/LiGoldragon/schema-rust.git", branch = "drop-next" }
+schema-rust = { package = "schema-rust", git = "https://github.com/LiGoldragon/schema-rust.git", branch = "main" }
 
 [lints.rust]
 unsafe_code = "forbid"
@@ -56,10 +56,10 @@ unused = { level = "warn", priority = -1 }
 dead_code = "warn"
 
 [dev-dependencies]
-message       = { git = "https://github.com/LiGoldragon/message.git", branch = "drop-next", features = [
+message       = { git = "https://github.com/LiGoldragon/message.git", branch = "main", features = [
     "nota-text",
 ] }
-signal-router = { git = "https://github.com/LiGoldragon/signal-router.git", branch = "drop-next" }
+signal-router = { git = "https://github.com/LiGoldragon/signal-router.git", branch = "main" }
 tempfile      = "3"
 
 [patch.crates-io]
