@@ -1173,6 +1173,24 @@ fn harness_daemon_validates_continuation_handles_at_harness_boundary() {
         })
     );
 
+    let preferred_pi = model_resolution_request(
+        ModelSelector::Exact(NamedModel::new("gemma-4-26b-a4b-ud-q4-k-xl")),
+        EffortRequest::Low,
+        ContinuationRequest::Prefer(ContinuationHandle::Pi(PiContinuationIdentifier::new(
+            "operator",
+        ))),
+    );
+    assert_eq!(
+        meta_harness_exchange(&supervision_socket, preferred_pi.into()),
+        MetaHarnessReply::ModelResolved(ModelResolved {
+            harness: HarnessName::new("operator"),
+            harness_kind: ContractHarnessKind::Pi,
+            model: NamedModel::new("gemma-4-26b-a4b-ud-q4-k-xl"),
+            effort: EffortRequest::Low,
+            continuation: ContinuationHandle::Pi(PiContinuationIdentifier::new("operator")),
+        })
+    );
+
     let wrong_provider = model_resolution_request(
         ModelSelector::Exact(NamedModel::new("gemma-4-26b-a4b-ud-q4-k-xl")),
         EffortRequest::Low,
@@ -1185,6 +1203,78 @@ fn harness_daemon_validates_continuation_handles_at_harness_boundary() {
         MetaHarnessReply::ModelUnavailable(ModelUnavailable {
             request: wrong_provider,
             reason: ModelUnavailableReason::ContinuationUnavailable,
+        })
+    );
+
+    let wrong_session_require = model_resolution_request(
+        ModelSelector::Exact(NamedModel::new("gemma-4-26b-a4b-ud-q4-k-xl")),
+        EffortRequest::Low,
+        ContinuationRequest::Require(ContinuationHandle::Pi(PiContinuationIdentifier::new(
+            "elsewhere",
+        ))),
+    );
+    assert_eq!(
+        meta_harness_exchange(&supervision_socket, wrong_session_require.clone().into()),
+        MetaHarnessReply::ModelUnavailable(ModelUnavailable {
+            request: wrong_session_require,
+            reason: ModelUnavailableReason::ContinuationUnavailable,
+        })
+    );
+
+    let wrong_session_prefer = model_resolution_request(
+        ModelSelector::Exact(NamedModel::new("gemma-4-26b-a4b-ud-q4-k-xl")),
+        EffortRequest::Low,
+        ContinuationRequest::Prefer(ContinuationHandle::Pi(PiContinuationIdentifier::new(
+            "elsewhere",
+        ))),
+    );
+    assert_eq!(
+        meta_harness_exchange(&supervision_socket, wrong_session_prefer.clone().into()),
+        MetaHarnessReply::ModelUnavailable(ModelUnavailable {
+            request: wrong_session_prefer,
+            reason: ModelUnavailableReason::ContinuationUnavailable,
+        })
+    );
+}
+
+#[test]
+fn harness_daemon_resolves_required_continuation_against_later_matching_pi_candidate() {
+    let fixture = SocketFixture::new("resolve-continuation-candidates");
+    let supervision_socket = fixture.supervision_socket();
+    let first_pi_rpc = PiRpcFixture::new("resolve-continuation-candidates-first");
+    let second_pi_rpc = PiRpcFixture::new("resolve-continuation-candidates-second");
+    let configuration_path = fixture.root.join("harness-daemon.rkyv");
+    write_configuration(
+        &configuration_path,
+        DaemonConfigurationBuilder::new(&fixture).build(vec![
+            HarnessInstanceConfigurationBuilder::new("first", ContractHarnessKind::Pi)
+                .with_pi_rpc(&first_pi_rpc)
+                .with_pi_model_pattern("gemma-4-26b-a4b-ud-q4-k-xl")
+                .build(),
+            HarnessInstanceConfigurationBuilder::new("second", ContractHarnessKind::Pi)
+                .with_pi_rpc(&second_pi_rpc)
+                .with_pi_model_pattern("gemma-4-26b-a4b-ud-q4-k-xl")
+                .build(),
+        ]),
+    );
+    let _daemon = SpawnedHarnessDaemon::spawn(&configuration_path);
+    wait_for_socket(&supervision_socket);
+
+    let request = model_resolution_request(
+        ModelSelector::Exact(NamedModel::new("gemma-4-26b-a4b-ud-q4-k-xl")),
+        EffortRequest::Low,
+        ContinuationRequest::Require(ContinuationHandle::Pi(PiContinuationIdentifier::new(
+            "second",
+        ))),
+    );
+    assert_eq!(
+        meta_harness_exchange(&supervision_socket, request.into()),
+        MetaHarnessReply::ModelResolved(ModelResolved {
+            harness: HarnessName::new("second"),
+            harness_kind: ContractHarnessKind::Pi,
+            model: NamedModel::new("gemma-4-26b-a4b-ud-q4-k-xl"),
+            effort: EffortRequest::Low,
+            continuation: ContinuationHandle::Pi(PiContinuationIdentifier::new("second")),
         })
     );
 }

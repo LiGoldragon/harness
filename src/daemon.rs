@@ -528,49 +528,106 @@ impl<'a> ModelResolutionCatalog<'a> {
         if self.configurations.is_empty() {
             return Err(ModelUnavailableReason::NoConfiguredHarness);
         }
-        let Some(selection) = self.selection_for_model_request(&request.model) else {
-            return Err(match &request.model.selector {
-                ModelSelector::Exact(_) => ModelUnavailableReason::ModelNotKnown,
-                ModelSelector::CapabilityProfile(_) => {
-                    ModelUnavailableReason::CapabilityUnsupported
-                }
-            });
-        };
-        if !selection.adapter.supports_effort(request.model.effort) {
-            return Err(ModelUnavailableReason::EffortUnsupported);
-        }
-        if !selection.adapter.has_required_runtime_adapter() {
-            return Err(ModelUnavailableReason::AdapterConfigurationMissing);
-        }
-        let Some(continuation) = selection
-            .adapter
-            .continuation_for_request(&request.continuation)
-        else {
-            return Err(ModelUnavailableReason::ContinuationUnavailable);
-        };
-        Ok(ModelResolved {
-            harness: selection.adapter.harness().clone(),
-            harness_kind: selection.adapter.contract_kind(),
-            model: selection.model,
-            effort: request.model.effort,
-            continuation,
-        })
-    }
-
-    fn selection_for_model_request(
-        &self,
-        request: &signal_harness::ModelRequest,
-    ) -> Option<ModelResolutionSelection<'a>> {
-        self.configurations
+        let mut failures = ExhaustedModelResolution::new(&request.model.selector);
+        for selection in self
+            .configurations
             .iter()
             .map(HarnessRuntimeConfiguration::resolver_adapter)
-            .find_map(|adapter| adapter.selection_for_model_request(request))
+            .filter_map(|adapter| adapter.selection_for_model_request(&request.model))
+        {
+            match selection.resolved_model(request) {
+                Ok(resolved) => return Ok(resolved),
+                Err(reason) => failures.record(reason),
+            }
+        }
+        Err(failures.into_reason())
+    }
+}
+
+struct ExhaustedModelResolution<'a> {
+    selector: &'a ModelSelector,
+    strongest_reason: Option<ModelUnavailableReason>,
+}
+
+impl<'a> ExhaustedModelResolution<'a> {
+    fn new(selector: &'a ModelSelector) -> Self {
+        Self {
+            selector,
+            strongest_reason: None,
+        }
+    }
+
+    fn record(&mut self, reason: ModelUnavailableReason) {
+        let new_priority = self.priority(&reason);
+        let current_priority = self
+            .strongest_reason
+            .as_ref()
+            .map(|current| self.priority(current))
+            .unwrap_or(0);
+        if self.strongest_reason.is_none() || new_priority > current_priority {
+            self.strongest_reason = Some(reason);
+        }
+    }
+
+    fn into_reason(self) -> ModelUnavailableReason {
+        self.strongest_reason
+            .unwrap_or_else(|| self.selector.unmatched_reason())
+    }
+
+    fn priority(&self, reason: &ModelUnavailableReason) -> u8 {
+        match reason {
+            ModelUnavailableReason::EffortUnsupported => 1,
+            ModelUnavailableReason::AdapterConfigurationMissing => 2,
+            ModelUnavailableReason::ContinuationUnavailable => 3,
+            ModelUnavailableReason::NoConfiguredHarness
+            | ModelUnavailableReason::ModelNotKnown
+            | ModelUnavailableReason::CapabilityUnsupported
+            | ModelUnavailableReason::ProviderUnavailable => 0,
+        }
+    }
+}
+
+trait ModelSelectorUnmatchedReason {
+    fn unmatched_reason(&self) -> ModelUnavailableReason;
+}
+
+impl ModelSelectorUnmatchedReason for ModelSelector {
+    fn unmatched_reason(&self) -> ModelUnavailableReason {
+        match self {
+            ModelSelector::Exact(_) => ModelUnavailableReason::ModelNotKnown,
+            ModelSelector::CapabilityProfile(_) => ModelUnavailableReason::CapabilityUnsupported,
+        }
     }
 }
 
 struct ModelResolutionSelection<'a> {
     adapter: ConfiguredResolverAdapter<'a>,
     model: NamedModel,
+}
+
+impl<'a> ModelResolutionSelection<'a> {
+    fn resolved_model(
+        self,
+        request: &ModelResolutionRequest,
+    ) -> std::result::Result<ModelResolved, ModelUnavailableReason> {
+        if !self.adapter.supports_effort(request.model.effort) {
+            return Err(ModelUnavailableReason::EffortUnsupported);
+        }
+        if !self.adapter.has_required_runtime_adapter() {
+            return Err(ModelUnavailableReason::AdapterConfigurationMissing);
+        }
+        let Some(continuation) = self.adapter.continuation_for_request(&request.continuation)
+        else {
+            return Err(ModelUnavailableReason::ContinuationUnavailable);
+        };
+        Ok(ModelResolved {
+            harness: self.adapter.harness().clone(),
+            harness_kind: self.adapter.contract_kind(),
+            model: self.model,
+            effort: request.model.effort,
+            continuation,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
