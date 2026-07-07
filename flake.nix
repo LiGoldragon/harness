@@ -121,6 +121,11 @@
           harness-daemon-rejects-message-delivery-without-terminal-endpoint = context.cargoTest "daemon" "harness_daemon_rejects_message_delivery_without_terminal_endpoint";
           harness-daemon-answers-component-supervision-relation = context.cargoTest "daemon" "harness_daemon_answers_component_supervision_relation";
           harness-daemon-answers-meta-harness-relation = context.cargoTest "daemon" "harness_daemon_answers_meta_harness_relation_with_typed_unimplemented";
+          harness-daemon-resolves-exact-pi-model-request = context.cargoTest "daemon" "harness_daemon_resolves_exact_pi_model_request";
+          harness-daemon-resolves-capability-profile-request = context.cargoTest "daemon" "harness_daemon_resolves_capability_profile_request";
+          harness-daemon-returns-typed-model-unavailable-reasons = context.cargoTest "daemon" "harness_daemon_returns_typed_model_unavailable_reasons";
+          harness-daemon-validates-continuation-handles-at-harness-boundary = context.cargoTest "daemon" "harness_daemon_validates_continuation_handles_at_harness_boundary";
+          harness-daemon-reports-adapter-configuration-missing-for-unlaunchable-match = context.cargoTest "daemon" "harness_daemon_reports_adapter_configuration_missing_for_unlaunchable_match";
           harness-daemon-watch-transcript-returns-typed-snapshot = context.cargoTest "daemon" "harness_daemon_watch_transcript_returns_typed_snapshot";
           harness-daemon-unwatch-transcript-returns-final-retraction-ack-on-subscribed-stream = context.cargoTest "daemon" "harness_daemon_unwatch_transcript_returns_final_retraction_ack_on_subscribed_stream";
           harness-daemon-watch-transcript-stream-delivers-published-observation-and-final-ack = context.cargoTest "daemon" "harness_daemon_watch_transcript_stream_delivers_published_observation_and_final_ack";

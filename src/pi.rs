@@ -100,6 +100,14 @@ impl PiRpcProcessConfiguration {
         &self.session_directory_path
     }
 
+    pub fn session_name(&self) -> &str {
+        &self.session_name
+    }
+
+    pub fn model_pattern(&self) -> Option<&str> {
+        self.model_pattern.as_deref()
+    }
+
     pub fn delivery_command(&self) -> PiRpcDeliveryCommand {
         self.delivery_command
     }

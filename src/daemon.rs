@@ -27,11 +27,14 @@ use signal_frame::{
     StreamEventIdentifier, SubReply, SubscriptionTokenInner,
 };
 use signal_harness::{
-    ClaudeSessionObservation, DeliveryCompleted, DeliveryFailed, DeliveryFailureReason,
-    HarnessDaemonConfiguration, HarnessEvent, HarnessFrame, HarnessFrameBody as FrameBody,
-    HarnessHealth, HarnessInstanceConfiguration, HarnessName, HarnessOperationKind,
-    HarnessReadiness, HarnessRequest, HarnessRequestUnimplemented, HarnessStatus,
-    HarnessStatusQuery, HarnessStreamEvent, HarnessUnimplementedReason, MessageDelivery,
+    CapabilityProfile, ClaudeSessionIdentifier, ClaudeSessionObservation,
+    CodexContinuationIdentifier, ContinuationHandle, ContinuationRequest, DeliveryCompleted,
+    DeliveryFailed, DeliveryFailureReason, EffortRequest, HarnessDaemonConfiguration, HarnessEvent,
+    HarnessFrame, HarnessFrameBody as FrameBody, HarnessHealth, HarnessInstanceConfiguration,
+    HarnessName, HarnessOperationKind, HarnessReadiness, HarnessRequest,
+    HarnessRequestUnimplemented, HarnessStatus, HarnessStatusQuery, HarnessStreamEvent,
+    HarnessUnimplementedReason, MessageDelivery, ModelResolutionRequest, ModelResolved,
+    ModelSelector, ModelUnavailable, ModelUnavailableReason, NamedModel, PiContinuationIdentifier,
     TranscriptObservation,
 };
 use tokio::io::{AsyncWrite, AsyncWriteExt};
@@ -243,10 +246,7 @@ impl HarnessEngine {
             .into_bytes();
         match ReceivedMetaHarnessRequest::decode(&body) {
             Ok(received) => {
-                let reply = MetaHarnessReply::RequestUnimplemented(RequestUnimplemented {
-                    operation: received.request.kind(),
-                    reason: UnimplementedReason::NotBuiltYet,
-                });
+                let reply = self.reply_for_meta_request(received.request).await?;
                 return WorkingMetaHarnessReply::new(received.exchange, reply)
                     .write(connection.stream_mut())
                     .await;
@@ -268,6 +268,25 @@ impl HarnessEngine {
         WorkingSupervisionReply::new(received.exchange, reply.reply)
             .write(connection.stream_mut())
             .await
+    }
+
+    async fn reply_for_meta_request(
+        &self,
+        request: MetaHarnessRequest,
+    ) -> Result<MetaHarnessReply> {
+        let reply = match request {
+            MetaHarnessRequest::Configure(configuration) => {
+                MetaHarnessReply::RequestUnimplemented(RequestUnimplemented {
+                    operation: MetaHarnessRequest::Configure(configuration).kind(),
+                    reason: UnimplementedReason::NotBuiltYet,
+                })
+            }
+            MetaHarnessRequest::ResolveModel(request) => {
+                ModelResolutionCatalog::new(&self.instance_configurations)
+                    .reply_for_request(request)
+            }
+        };
+        Ok(reply)
     }
 }
 
@@ -470,6 +489,289 @@ impl HarnessRuntimeConfiguration {
             .terminal_endpoint
             .clone()
             .map(HarnessDeliveryAdapter::terminal))
+    }
+
+    fn contract_kind(&self) -> signal_harness::HarnessKind {
+        match &self.kind {
+            HarnessKind::Codex => signal_harness::HarnessKind::Codex,
+            HarnessKind::Claude => signal_harness::HarnessKind::Claude,
+            HarnessKind::Pi => signal_harness::HarnessKind::Pi,
+            HarnessKind::Fixture => signal_harness::HarnessKind::Fixture,
+        }
+    }
+
+    fn resolver_adapter(&self) -> ConfiguredResolverAdapter<'_> {
+        ConfiguredResolverAdapter::new(self)
+    }
+}
+
+struct ModelResolutionCatalog<'a> {
+    configurations: &'a [HarnessRuntimeConfiguration],
+}
+
+impl<'a> ModelResolutionCatalog<'a> {
+    fn new(configurations: &'a [HarnessRuntimeConfiguration]) -> Self {
+        Self { configurations }
+    }
+
+    fn reply_for_request(&self, request: ModelResolutionRequest) -> MetaHarnessReply {
+        match self.resolved_model(&request) {
+            Ok(resolved) => MetaHarnessReply::ModelResolved(resolved),
+            Err(reason) => MetaHarnessReply::ModelUnavailable(ModelUnavailable { request, reason }),
+        }
+    }
+
+    fn resolved_model(
+        &self,
+        request: &ModelResolutionRequest,
+    ) -> std::result::Result<ModelResolved, ModelUnavailableReason> {
+        if self.configurations.is_empty() {
+            return Err(ModelUnavailableReason::NoConfiguredHarness);
+        }
+        let Some(selection) = self.selection_for_model_request(&request.model) else {
+            return Err(match &request.model.selector {
+                ModelSelector::Exact(_) => ModelUnavailableReason::ModelNotKnown,
+                ModelSelector::CapabilityProfile(_) => {
+                    ModelUnavailableReason::CapabilityUnsupported
+                }
+            });
+        };
+        if !selection.adapter.supports_effort(request.model.effort) {
+            return Err(ModelUnavailableReason::EffortUnsupported);
+        }
+        if !selection.adapter.has_required_runtime_adapter() {
+            return Err(ModelUnavailableReason::AdapterConfigurationMissing);
+        }
+        let Some(continuation) = selection
+            .adapter
+            .continuation_for_request(&request.continuation)
+        else {
+            return Err(ModelUnavailableReason::ContinuationUnavailable);
+        };
+        Ok(ModelResolved {
+            harness: selection.adapter.harness().clone(),
+            harness_kind: selection.adapter.contract_kind(),
+            model: selection.model,
+            effort: request.model.effort,
+            continuation,
+        })
+    }
+
+    fn selection_for_model_request(
+        &self,
+        request: &signal_harness::ModelRequest,
+    ) -> Option<ModelResolutionSelection<'a>> {
+        self.configurations
+            .iter()
+            .map(HarnessRuntimeConfiguration::resolver_adapter)
+            .find_map(|adapter| adapter.selection_for_model_request(request))
+    }
+}
+
+struct ModelResolutionSelection<'a> {
+    adapter: ConfiguredResolverAdapter<'a>,
+    model: NamedModel,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ConfiguredResolverAdapter<'a> {
+    configuration: &'a HarnessRuntimeConfiguration,
+}
+
+impl<'a> ConfiguredResolverAdapter<'a> {
+    fn new(configuration: &'a HarnessRuntimeConfiguration) -> Self {
+        Self { configuration }
+    }
+
+    fn harness(&self) -> &HarnessName {
+        &self.configuration.harness
+    }
+
+    fn contract_kind(&self) -> signal_harness::HarnessKind {
+        self.configuration.contract_kind()
+    }
+
+    fn selection_for_model_request(
+        self,
+        request: &signal_harness::ModelRequest,
+    ) -> Option<ModelResolutionSelection<'a>> {
+        let model = match &request.selector {
+            ModelSelector::Exact(model) => self.exact_model(model)?,
+            ModelSelector::CapabilityProfile(profile) => self.model_for_profile(profile)?,
+        };
+        Some(ModelResolutionSelection {
+            adapter: self,
+            model,
+        })
+    }
+
+    fn exact_model(&self, requested: &NamedModel) -> Option<NamedModel> {
+        match &self.configuration.kind {
+            HarnessKind::Codex => ProviderModelNamespace::codex().exact_model(requested),
+            HarnessKind::Claude => ProviderModelNamespace::claude().exact_model(requested),
+            HarnessKind::Pi => self
+                .configuration
+                .pi_rpc_configuration
+                .as_ref()?
+                .model_pattern()
+                .filter(|model| *model == requested.as_str())
+                .map(NamedModel::new),
+            HarnessKind::Fixture => None,
+        }
+    }
+
+    fn model_for_profile(&self, requested: &CapabilityProfile) -> Option<NamedModel> {
+        match &self.configuration.kind {
+            HarnessKind::Codex => ProviderModelNamespace::codex().model_for_profile(requested),
+            HarnessKind::Claude => ProviderModelNamespace::claude().model_for_profile(requested),
+            HarnessKind::Pi => {
+                if !ProviderModelNamespace::pi().profile_matches(requested) {
+                    return None;
+                }
+                Some(
+                    self.configuration
+                        .pi_rpc_configuration
+                        .as_ref()
+                        .and_then(PiRpcProcessConfiguration::model_pattern)
+                        .map(NamedModel::new)
+                        .unwrap_or_else(|| NamedModel::new(requested.as_str())),
+                )
+            }
+            HarnessKind::Fixture => None,
+        }
+    }
+
+    fn supports_effort(&self, effort: EffortRequest) -> bool {
+        match &self.configuration.kind {
+            HarnessKind::Codex | HarnessKind::Claude => true,
+            HarnessKind::Pi => matches!(
+                effort,
+                EffortRequest::Minimal | EffortRequest::Low | EffortRequest::Medium
+            ),
+            HarnessKind::Fixture => false,
+        }
+    }
+
+    fn has_required_runtime_adapter(&self) -> bool {
+        match &self.configuration.kind {
+            HarnessKind::Codex | HarnessKind::Claude => {
+                self.configuration.terminal_endpoint.is_some()
+            }
+            HarnessKind::Pi => self
+                .configuration
+                .pi_rpc_configuration
+                .as_ref()
+                .and_then(PiRpcProcessConfiguration::model_pattern)
+                .is_some(),
+            HarnessKind::Fixture => false,
+        }
+    }
+
+    fn continuation_for_request(
+        &self,
+        request: &ContinuationRequest,
+    ) -> Option<ContinuationHandle> {
+        match request {
+            ContinuationRequest::Fresh => self.fresh_continuation(),
+            ContinuationRequest::Prefer(handle) | ContinuationRequest::Require(handle) => {
+                self.validated_continuation(handle)
+            }
+        }
+    }
+
+    fn fresh_continuation(&self) -> Option<ContinuationHandle> {
+        match &self.configuration.kind {
+            HarnessKind::Codex => Some(ContinuationHandle::Codex(
+                CodexContinuationIdentifier::new(self.harness().as_str()),
+            )),
+            HarnessKind::Claude => Some(ContinuationHandle::Claude(ClaudeSessionIdentifier::new(
+                self.harness().as_str(),
+            ))),
+            HarnessKind::Pi => {
+                self.configuration
+                    .pi_rpc_configuration
+                    .as_ref()
+                    .map(|configuration| {
+                        ContinuationHandle::Pi(PiContinuationIdentifier::new(
+                            configuration.session_name(),
+                        ))
+                    })
+            }
+            HarnessKind::Fixture => None,
+        }
+    }
+
+    fn validated_continuation(&self, handle: &ContinuationHandle) -> Option<ContinuationHandle> {
+        match (&self.configuration.kind, handle) {
+            (HarnessKind::Codex, ContinuationHandle::Codex(identifier)) => {
+                (!identifier.as_str().is_empty()).then(|| handle.clone())
+            }
+            (HarnessKind::Claude, ContinuationHandle::Claude(identifier)) => {
+                (!identifier.as_str().is_empty()).then(|| handle.clone())
+            }
+            (HarnessKind::Pi, ContinuationHandle::Pi(identifier)) => self
+                .configuration
+                .pi_rpc_configuration
+                .as_ref()
+                .filter(|configuration| configuration.session_name() == identifier.as_str())
+                .map(|_| handle.clone()),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ProviderModelNamespace {
+    exact_models: &'static [&'static str],
+    capability_profiles: &'static [&'static str],
+    default_model: &'static str,
+}
+
+impl ProviderModelNamespace {
+    fn codex() -> Self {
+        Self {
+            exact_models: &["gpt-5-codex", "codex"],
+            capability_profiles: &["codex", "coding"],
+            default_model: "gpt-5-codex",
+        }
+    }
+
+    fn claude() -> Self {
+        Self {
+            exact_models: &[
+                "claude-sonnet-4-20250514",
+                "claude-opus-4-20250514",
+                "claude-3-5-haiku-latest",
+                "sonnet",
+                "opus",
+                "haiku",
+            ],
+            capability_profiles: &["claude", "anthropic"],
+            default_model: "claude-sonnet-4-20250514",
+        }
+    }
+
+    fn pi() -> Self {
+        Self {
+            exact_models: &[],
+            capability_profiles: &["pi", "local"],
+            default_model: "",
+        }
+    }
+
+    fn exact_model(&self, requested: &NamedModel) -> Option<NamedModel> {
+        self.exact_models
+            .contains(&requested.as_str())
+            .then(|| requested.clone())
+    }
+
+    fn model_for_profile(&self, requested: &CapabilityProfile) -> Option<NamedModel> {
+        self.profile_matches(requested)
+            .then(|| NamedModel::new(self.default_model))
+    }
+
+    fn profile_matches(&self, requested: &CapabilityProfile) -> bool {
+        self.capability_profiles.contains(&requested.as_str())
     }
 }
 

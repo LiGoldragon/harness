@@ -31,13 +31,16 @@ use signal_frame::{
     SubscriptionTokenInner,
 };
 use signal_harness::{
-    DeliveryCompleted, DeliveryFailed, DeliveryFailureReason, HarnessDaemonConfiguration,
-    HarnessEvent, HarnessFrame, HarnessFrameBody, HarnessHealth, HarnessInstanceConfiguration,
-    HarnessKind as ContractHarnessKind, HarnessName, HarnessOperationKind, HarnessReadiness,
-    HarnessRequest, HarnessRequestUnimplemented, HarnessStatus, HarnessStatusQuery,
-    HarnessStreamEvent, HarnessTranscriptSequence, HarnessTranscriptToken,
-    HarnessUnimplementedReason, InteractionPrompt, MessageBody, MessageDelivery, MessageSender,
-    MessageSlot, PiRpcCommandPath, PiRpcSessionDirectoryPath, TerminalSocketPath,
+    CapabilityProfile, ClaudeSessionIdentifier, ContinuationHandle, ContinuationRequest,
+    DeliveryCompleted, DeliveryFailed, DeliveryFailureReason, EffortRequest,
+    HarnessDaemonConfiguration, HarnessEvent, HarnessFrame, HarnessFrameBody, HarnessHealth,
+    HarnessInstanceConfiguration, HarnessKind as ContractHarnessKind, HarnessName,
+    HarnessOperationKind, HarnessReadiness, HarnessRequest, HarnessRequestUnimplemented,
+    HarnessStatus, HarnessStatusQuery, HarnessStreamEvent, HarnessTranscriptSequence,
+    HarnessTranscriptToken, HarnessUnimplementedReason, InteractionPrompt, MessageBody,
+    MessageDelivery, MessageSender, MessageSlot, ModelRequest, ModelResolutionRequest,
+    ModelResolved, ModelSelector, ModelUnavailable, ModelUnavailableReason, NamedModel,
+    PiContinuationIdentifier, PiRpcCommandPath, PiRpcSessionDirectoryPath, TerminalSocketPath,
     TranscriptObservation, WatchHarnessTranscript,
 };
 use signal_persona::{
@@ -1003,6 +1006,218 @@ fn harness_daemon_answers_meta_harness_relation_with_typed_unimplemented() {
 }
 
 #[test]
+fn harness_daemon_resolves_exact_pi_model_request() {
+    let fixture = SocketFixture::new("resolve-exact-pi");
+    let supervision_socket = fixture.supervision_socket();
+    let pi_rpc = PiRpcFixture::new("resolve-exact-pi");
+    let configuration_path = fixture.root.join("harness-daemon.rkyv");
+    write_configuration(
+        &configuration_path,
+        DaemonConfigurationBuilder::new(&fixture).build(vec![
+            HarnessInstanceConfigurationBuilder::new("operator", ContractHarnessKind::Pi)
+                .with_pi_rpc(&pi_rpc)
+                .with_pi_model_pattern("gemma-4-26b-a4b-ud-q4-k-xl")
+                .build(),
+        ]),
+    );
+    let _daemon = SpawnedHarnessDaemon::spawn(&configuration_path);
+    wait_for_socket(&supervision_socket);
+
+    let request = model_resolution_request(
+        ModelSelector::Exact(NamedModel::new("gemma-4-26b-a4b-ud-q4-k-xl")),
+        EffortRequest::Low,
+        ContinuationRequest::Fresh,
+    );
+    let reply = meta_harness_exchange(&supervision_socket, request.into());
+
+    assert_eq!(
+        reply,
+        MetaHarnessReply::ModelResolved(ModelResolved {
+            harness: HarnessName::new("operator"),
+            harness_kind: ContractHarnessKind::Pi,
+            model: NamedModel::new("gemma-4-26b-a4b-ud-q4-k-xl"),
+            effort: EffortRequest::Low,
+            continuation: ContinuationHandle::Pi(PiContinuationIdentifier::new("operator")),
+        })
+    );
+}
+
+#[test]
+fn harness_daemon_resolves_capability_profile_request() {
+    let fixture = SocketFixture::new("resolve-capability-pi");
+    let supervision_socket = fixture.supervision_socket();
+    let pi_rpc = PiRpcFixture::new("resolve-capability-pi");
+    let configuration_path = fixture.root.join("harness-daemon.rkyv");
+    write_configuration(
+        &configuration_path,
+        DaemonConfigurationBuilder::new(&fixture).build(vec![
+            HarnessInstanceConfigurationBuilder::new("operator", ContractHarnessKind::Pi)
+                .with_pi_rpc(&pi_rpc)
+                .with_pi_model_pattern("gemma-4-26b-a4b-ud-q4-k-xl")
+                .build(),
+        ]),
+    );
+    let _daemon = SpawnedHarnessDaemon::spawn(&configuration_path);
+    wait_for_socket(&supervision_socket);
+
+    let request = model_resolution_request(
+        ModelSelector::CapabilityProfile(CapabilityProfile::new("local")),
+        EffortRequest::Minimal,
+        ContinuationRequest::Fresh,
+    );
+    let reply = meta_harness_exchange(&supervision_socket, request.into());
+
+    assert_eq!(
+        reply,
+        MetaHarnessReply::ModelResolved(ModelResolved {
+            harness: HarnessName::new("operator"),
+            harness_kind: ContractHarnessKind::Pi,
+            model: NamedModel::new("gemma-4-26b-a4b-ud-q4-k-xl"),
+            effort: EffortRequest::Minimal,
+            continuation: ContinuationHandle::Pi(PiContinuationIdentifier::new("operator")),
+        })
+    );
+}
+
+#[test]
+fn harness_daemon_returns_typed_model_unavailable_reasons() {
+    let fixture = SocketFixture::new("resolve-unavailable");
+    let supervision_socket = fixture.supervision_socket();
+    let pi_rpc = PiRpcFixture::new("resolve-unavailable");
+    let configuration_path = fixture.root.join("harness-daemon.rkyv");
+    write_configuration(
+        &configuration_path,
+        DaemonConfigurationBuilder::new(&fixture).build(vec![
+            HarnessInstanceConfigurationBuilder::new("operator", ContractHarnessKind::Pi)
+                .with_pi_rpc(&pi_rpc)
+                .with_pi_model_pattern("gemma-4-26b-a4b-ud-q4-k-xl")
+                .build(),
+        ]),
+    );
+    let _daemon = SpawnedHarnessDaemon::spawn(&configuration_path);
+    wait_for_socket(&supervision_socket);
+
+    let unknown_model = model_resolution_request(
+        ModelSelector::Exact(NamedModel::new("unknown-model")),
+        EffortRequest::Low,
+        ContinuationRequest::Fresh,
+    );
+    assert_eq!(
+        meta_harness_exchange(&supervision_socket, unknown_model.clone().into()),
+        MetaHarnessReply::ModelUnavailable(ModelUnavailable {
+            request: unknown_model,
+            reason: ModelUnavailableReason::ModelNotKnown,
+        })
+    );
+
+    let unsupported_capability = model_resolution_request(
+        ModelSelector::CapabilityProfile(CapabilityProfile::new("cloud-reasoning")),
+        EffortRequest::Low,
+        ContinuationRequest::Fresh,
+    );
+    assert_eq!(
+        meta_harness_exchange(&supervision_socket, unsupported_capability.clone().into()),
+        MetaHarnessReply::ModelUnavailable(ModelUnavailable {
+            request: unsupported_capability,
+            reason: ModelUnavailableReason::CapabilityUnsupported,
+        })
+    );
+
+    let unsupported_effort = model_resolution_request(
+        ModelSelector::Exact(NamedModel::new("gemma-4-26b-a4b-ud-q4-k-xl")),
+        EffortRequest::ExtraHigh,
+        ContinuationRequest::Fresh,
+    );
+    assert_eq!(
+        meta_harness_exchange(&supervision_socket, unsupported_effort.clone().into()),
+        MetaHarnessReply::ModelUnavailable(ModelUnavailable {
+            request: unsupported_effort,
+            reason: ModelUnavailableReason::EffortUnsupported,
+        })
+    );
+}
+
+#[test]
+fn harness_daemon_validates_continuation_handles_at_harness_boundary() {
+    let fixture = SocketFixture::new("resolve-continuation");
+    let supervision_socket = fixture.supervision_socket();
+    let pi_rpc = PiRpcFixture::new("resolve-continuation");
+    let configuration_path = fixture.root.join("harness-daemon.rkyv");
+    write_configuration(
+        &configuration_path,
+        DaemonConfigurationBuilder::new(&fixture).build(vec![
+            HarnessInstanceConfigurationBuilder::new("operator", ContractHarnessKind::Pi)
+                .with_pi_rpc(&pi_rpc)
+                .with_pi_model_pattern("gemma-4-26b-a4b-ud-q4-k-xl")
+                .build(),
+        ]),
+    );
+    let _daemon = SpawnedHarnessDaemon::spawn(&configuration_path);
+    wait_for_socket(&supervision_socket);
+
+    let required_pi = model_resolution_request(
+        ModelSelector::Exact(NamedModel::new("gemma-4-26b-a4b-ud-q4-k-xl")),
+        EffortRequest::Low,
+        ContinuationRequest::Require(ContinuationHandle::Pi(PiContinuationIdentifier::new(
+            "operator",
+        ))),
+    );
+    assert_eq!(
+        meta_harness_exchange(&supervision_socket, required_pi.into()),
+        MetaHarnessReply::ModelResolved(ModelResolved {
+            harness: HarnessName::new("operator"),
+            harness_kind: ContractHarnessKind::Pi,
+            model: NamedModel::new("gemma-4-26b-a4b-ud-q4-k-xl"),
+            effort: EffortRequest::Low,
+            continuation: ContinuationHandle::Pi(PiContinuationIdentifier::new("operator")),
+        })
+    );
+
+    let wrong_provider = model_resolution_request(
+        ModelSelector::Exact(NamedModel::new("gemma-4-26b-a4b-ud-q4-k-xl")),
+        EffortRequest::Low,
+        ContinuationRequest::Prefer(ContinuationHandle::Claude(ClaudeSessionIdentifier::new(
+            "claude-session",
+        ))),
+    );
+    assert_eq!(
+        meta_harness_exchange(&supervision_socket, wrong_provider.clone().into()),
+        MetaHarnessReply::ModelUnavailable(ModelUnavailable {
+            request: wrong_provider,
+            reason: ModelUnavailableReason::ContinuationUnavailable,
+        })
+    );
+}
+
+#[test]
+fn harness_daemon_reports_adapter_configuration_missing_for_unlaunchable_match() {
+    let fixture = SocketFixture::new("resolve-adapter-missing");
+    let supervision_socket = fixture.supervision_socket();
+    let configuration_path = fixture.root.join("harness-daemon.rkyv");
+    write_configuration(
+        &configuration_path,
+        DaemonConfigurationBuilder::new(&fixture).build(vec![
+            HarnessInstanceConfigurationBuilder::new("operator", ContractHarnessKind::Pi).build(),
+        ]),
+    );
+    let _daemon = SpawnedHarnessDaemon::spawn(&configuration_path);
+    wait_for_socket(&supervision_socket);
+
+    let request = model_resolution_request(
+        ModelSelector::CapabilityProfile(CapabilityProfile::new("pi")),
+        EffortRequest::Low,
+        ContinuationRequest::Fresh,
+    );
+    assert_eq!(
+        meta_harness_exchange(&supervision_socket, request.clone().into()),
+        MetaHarnessReply::ModelUnavailable(ModelUnavailable {
+            request,
+            reason: ModelUnavailableReason::AdapterConfigurationMissing,
+        })
+    );
+}
+
+#[test]
 fn harness_daemon_answers_component_supervision_relation() {
     let fixture = SocketFixture::new("component-supervision");
     let supervision_socket = fixture.supervision_socket();
@@ -1065,6 +1280,23 @@ fn supervision_exchange(socket: &Path, request: SupervisionRequest) -> Supervisi
     let mut stream = UnixStream::connect(socket).expect("supervision client connects");
     write_supervision_request(&mut stream, request);
     read_supervision_reply(&mut stream)
+}
+
+fn meta_harness_exchange(socket: &Path, request: MetaHarnessRequest) -> MetaHarnessReply {
+    let mut stream = UnixStream::connect(socket).expect("meta-harness client connects");
+    write_meta_harness_request(&mut stream, request);
+    read_meta_harness_reply(&mut stream)
+}
+
+fn model_resolution_request(
+    selector: ModelSelector,
+    effort: EffortRequest,
+    continuation: ContinuationRequest,
+) -> ModelResolutionRequest {
+    ModelResolutionRequest {
+        model: ModelRequest { selector, effort },
+        continuation,
+    }
 }
 
 /// Builds a binary `HarnessDaemonConfiguration` against one fixture's sockets.
@@ -1143,6 +1375,14 @@ impl HarnessInstanceConfigurationBuilder {
             delivery_mode: signal_harness::PiRpcDeliveryMode::Steer,
             model_pattern: None,
         });
+        self
+    }
+
+    fn with_pi_model_pattern(mut self, model_pattern: &str) -> Self {
+        let Some(adapter) = self.pi_rpc_adapter.as_mut() else {
+            panic!("pi model pattern requires pi rpc adapter");
+        };
+        adapter.model_pattern = Some(signal_harness::PiRpcModelPattern::new(model_pattern));
         self
     }
 

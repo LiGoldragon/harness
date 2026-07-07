@@ -32,6 +32,15 @@ path = "src/bin/harness_claude_artifact_observer_test.rs"
 name = "harness-claude-session-stream-test"
 path = "src/bin/harness_claude_session_stream_test.rs"
 
+[[test]]
+name = "message_router_harness_e2e"
+path = "tests/message_router_harness_e2e.rs"
+required-features = ["message-router-e2e"]
+
+[features]
+default = []
+message-router-e2e = ["dep:message", "dep:signal-router"]
+
 [dependencies]
 kameo                   = { git = "https://github.com/LiGoldragon/kameo.git", branch = "main", default-features = false, features = ["macros", "tracing"] }
 meta-signal-harness     = { git = "https://github.com/LiGoldragon/meta-signal-harness.git", branch = "main" }
@@ -46,6 +55,10 @@ thiserror               = "2"
 tokio                   = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time"] }
 triad-runtime           = { git = "https://github.com/LiGoldragon/triad-runtime.git", branch = "main" }
 notify = "8.2.0"
+message                 = { git = "https://github.com/LiGoldragon/message.git", branch = "synchronizer", features = [
+    "nota-text",
+], optional = true }
+signal-router          = { git = "https://github.com/LiGoldragon/signal-router.git", branch = "primary-2v5c.10.1.6-signal-router-trueschema", optional = true }
 
 [build-dependencies]
 schema-rust = { package = "schema-rust", git = "https://github.com/LiGoldragon/schema-rust.git", branch = "main" }
@@ -56,10 +69,6 @@ unused = { level = "warn", priority = -1 }
 dead_code = "warn"
 
 [dev-dependencies]
-message       = { git = "https://github.com/LiGoldragon/message.git", branch = "main", features = [
-    "nota-text",
-] }
-signal-router = { git = "https://github.com/LiGoldragon/signal-router.git", branch = "main" }
 tempfile      = "3"
 
 [patch.crates-io]

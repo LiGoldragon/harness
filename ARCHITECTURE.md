@@ -106,6 +106,21 @@ One `harness-daemon` process may own multiple harness instances; those
 boundaries are in-process actors/adapters unless a future deployment
 requires process isolation.
 
+The owner-only meta surface handles `ResolveModel(ModelResolutionRequest)`
+in `harness`, not in orchestrate or a `meta-*` crate. The runtime resolves
+an exact model selector or a named capability profile against the configured
+harness adapters, returns `ModelResolved` with the chosen harness, closed
+`HarnessKind`, provider model, effort, and typed `ContinuationHandle`, or
+returns `ModelUnavailable` with the narrow reason it can prove. Pi exact
+resolution is driven by the configured `PiRpcJsonlAdapterConfiguration`
+model pattern; Pi capability profiles `pi` and `local` select that configured
+model. Claude and Codex use harness-owned provider namespaces for their
+known model/profile names, and still require a configured terminal adapter.
+`ContinuationRequest::Require` accepts only a provider-matching valid handle.
+`ContinuationRequest::Prefer` is deliberately not a silent fallback: an
+invalid or wrong-provider handle returns `ContinuationUnavailable`, so the
+orchestrator can explicitly retry with `Fresh` if that is its policy.
+
 **Harness lifecycle FSM** (closed enum):
 
 ```text
@@ -320,6 +335,8 @@ tests/                    harness smoke, daemon, CLI, and actor-runtime tests
 | Harness daemon answers status/readiness through its Signal boundary. | `nix flake check .#harness-daemon-answers-status-readiness` |
 | Harness daemon returns typed unimplemented for valid unfinished requests. | `nix flake check .#harness-daemon-returns-typed-unimplemented` |
 | Harness daemon recognizes the meta-harness policy contract before Persona supervision fallback. | `nix flake check .#harness-daemon-answers-meta-harness-relation` |
+| Harness daemon resolves exact Pi model requests and capability/profile requests through the owner-only meta surface. | `nix build .#checks.<system>.harness-daemon-resolves-exact-pi-model-request`; `nix build .#checks.<system>.harness-daemon-resolves-capability-profile-request` |
+| Harness daemon returns typed model-unavailable reasons and validates provider continuation handles at the harness boundary. | `nix build .#checks.<system>.harness-daemon-returns-typed-model-unavailable-reasons`; `nix build .#checks.<system>.harness-daemon-validates-continuation-handles-at-harness-boundary`; `nix build .#checks.<system>.harness-daemon-reports-adapter-configuration-missing-for-unlaunchable-match` |
 | `harness` reaches the ordinary working socket and prints a typed reply. | `nix flake check .#harness-cli-reaches-working-socket` |
 | `meta-harness` reaches the owner/meta policy socket and prints a typed reply. | `nix flake check .#meta-harness-cli-reaches-policy-socket` |
 | Harness daemon opens a transcript subscription, returns a typed snapshot, and pushes typed deltas plus the final ack on the subscribed stream. | `nix build .#checks.<system>.harness-daemon-watch-transcript-stream-delivers-published-observation-and-final-ack` |
@@ -327,7 +344,7 @@ tests/                    harness smoke, daemon, CLI, and actor-runtime tests
 | Multiple simultaneous watchers for the same harness receive independent stream frames, and closing one watcher does not close the other. | `nix build .#checks.<system>.harness-daemon-allows-nested-watchers-for-same-harness-without-cross-closing` |
 | A transcript stream is bound to its first watched harness; cross-harness nested watches are rejected without creating a misrouted subscription. | `nix build .#checks.<system>.harness-daemon-rejects-cross-harness-nested-watch-without-leaking-subscription` |
 | A slow subscriber does not stall transcript-delta delivery to a sibling subscription. | `cargo test --test subscription_truth slow_subscriber_does_not_block_sibling_subscription` |
-| A real `message` CLI call reaches a second Pi-kind harness through real message/router daemons and one multi-instance harness daemon, the receiving endpoint replies through its own real `message` CLI and daemon, and the first harness receives the response. | `cargo test --test message_router_harness_e2e` |
+| A real `message` CLI call reaches a second Pi-kind harness through real message/router daemons and one multi-instance harness daemon, the receiving endpoint replies through its own real `message` CLI and daemon, and the first harness receives the response. | `cargo test --features message-router-e2e --test message_router_harness_e2e` |
 
 ## See Also
 
