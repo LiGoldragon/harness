@@ -1,8 +1,5 @@
 # Persona Harness — Agent Instructions
 
-Read `/home/li/primary/AGENTS.md` first, then `/home/li/primary/lore/AGENTS.md`.
-This repository follows the primary workspace orchestration protocol.
-
 ## Purpose
 
 `harness` owns typed harness identity, lifecycle, transcript capture,
