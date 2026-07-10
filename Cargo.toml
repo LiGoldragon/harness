@@ -37,6 +37,11 @@ name = "message_router_harness_e2e"
 path = "tests/message_router_harness_e2e.rs"
 required-features = ["message-router-e2e"]
 
+[[test]]
+name = "message_router_harness_pi_steer_e2e"
+path = "tests/message_router_harness_pi_steer_e2e.rs"
+required-features = ["message-router-e2e"]
+
 [features]
 default = []
 message-router-e2e = ["dep:message", "dep:signal-router"]

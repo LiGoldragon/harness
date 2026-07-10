@@ -244,7 +244,7 @@ impl MessageRouterHarnessE2e {
                 u64::from(self.current_uid()),
             )),
             tailnet_listen_address: None,
-            router_identity: signal_router::RemoteRouterIdentity::new("local-router"),
+            router_identity: signal_router::CriomeHostId::new("local-router"),
             criome_socket_path: None,
         });
         RouterConfigurationFile::write(&configuration_path, &configuration);

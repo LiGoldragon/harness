@@ -402,12 +402,12 @@ checksum = "88904434abc2901f197fe8cc55f0445e7ded921dba5911dad2e2b39b48e663c4"
 [[package]]
 name = "message"
 version = "0.5.0"
-source = "git+https://github.com/LiGoldragon/message.git?branch=synchronizer#2ebd32f07ad46a465ee1e1a3cb7e9ea64ad316aa"
+source = "git+https://github.com/LiGoldragon/message.git?branch=synchronizer#846318b163267039ce71ebd58167f6bc6180c18c"
 dependencies = [
  "meta-signal-message",
- "nota 0.5.1 (git+https://github.com/LiGoldragon/nota-next.git?branch=main)",
+ "nota 0.5.1 (git+https://github.com/LiGoldragon/nota.git?branch=main)",
  "rkyv",
- "schema-rust 0.6.0 (git+https://github.com/LiGoldragon/schema-rust-next.git?branch=main)",
+ "schema-rust 0.6.0 (git+https://github.com/LiGoldragon/schema-rust.git?branch=main)",
  "signal-frame",
  "signal-message",
  "thiserror",
@@ -482,28 +482,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "nota"
-version = "0.5.1"
-source = "git+https://github.com/LiGoldragon/nota-next.git?branch=main#ce7c564de0a0518eaa1938d55dccc460a67cadb4"
-dependencies = [
- "nota-derive 0.3.0 (git+https://github.com/LiGoldragon/nota-next.git?branch=main)",
- "rkyv",
-]
-
-[[package]]
 name = "nota-derive"
 version = "0.3.0"
 source = "git+https://github.com/LiGoldragon/nota.git?branch=main#ce7c564de0a0518eaa1938d55dccc460a67cadb4"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
-name = "nota-derive"
-version = "0.3.0"
-source = "git+https://github.com/LiGoldragon/nota-next.git?branch=main#ce7c564de0a0518eaa1938d55dccc460a67cadb4"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -764,21 +745,6 @@ dependencies = [
 name = "schema-rust"
 version = "0.6.0"
 source = "git+https://github.com/LiGoldragon/schema-rust.git?branch=main#3278fbc6e6593c044437b3ee5ca1fe71cac344c1"
-dependencies = [
- "nota 0.5.1 (git+https://github.com/LiGoldragon/nota.git?branch=main)",
- "prettyplease",
- "proc-macro2",
- "quote",
- "schema-language",
- "syn",
- "thiserror",
- "triad-runtime",
-]
-
-[[package]]
-name = "schema-rust"
-version = "0.6.0"
-source = "git+https://github.com/LiGoldragon/schema-rust-next.git?branch=main#3278fbc6e6593c044437b3ee5ca1fe71cac344c1"
 dependencies = [
  "nota 0.5.1 (git+https://github.com/LiGoldragon/nota.git?branch=main)",
  "prettyplease",
