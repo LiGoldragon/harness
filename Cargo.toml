@@ -60,10 +60,10 @@ thiserror               = "2"
 tokio                   = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time"] }
 triad-runtime           = { git = "https://github.com/LiGoldragon/triad-runtime.git", branch = "main" }
 notify = "8.2.0"
-message                 = { git = "https://github.com/LiGoldragon/message.git", branch = "synchronizer", features = [
+message                 = { git = "https://github.com/LiGoldragon/message.git", branch = "main", features = [
     "nota-text",
 ], optional = true }
-signal-router          = { git = "https://github.com/LiGoldragon/signal-router.git", branch = "primary-2v5c.10.1.6-signal-router-trueschema", optional = true }
+signal-router          = { git = "https://github.com/LiGoldragon/signal-router.git", branch = "main", optional = true }
 
 [build-dependencies]
 schema-rust = { package = "schema-rust", git = "https://github.com/LiGoldragon/schema-rust.git", branch = "main" }

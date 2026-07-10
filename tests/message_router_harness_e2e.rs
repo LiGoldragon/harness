@@ -49,7 +49,7 @@ fn message_cli_round_trips_between_two_agents_through_one_harness_daemon() {
 
     let output = Command::new(test.binaries().message_cli())
         .env("MESSAGE_SOCKET", test.message_socket(AGENT_A))
-        .arg("(Send agent-b [question from agent a])")
+        .arg("(Send agent-b [question from agent a] None)")
         .output()
         .expect("run agent A message CLI");
 
@@ -659,7 +659,7 @@ impl ReplyingTerminalSocket {
                         .expect("terminal socket writes Signal acceptance");
                     let output = Command::new(message_cli)
                         .env("MESSAGE_SOCKET", message_socket)
-                        .arg("(Send agent-a [response from agent b])")
+                        .arg("(Send agent-a [response from agent b] None)")
                         .output()
                         .expect("run agent B message CLI");
                     assert!(

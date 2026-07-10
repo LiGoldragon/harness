@@ -56,6 +56,16 @@ const SENDER: &str = "agent-a";
 const RECIPIENT: &str = "agent-b";
 /// The body carried end to end and delivered to the live model as a steer.
 const MESSAGE_BODY: &str = "steer from the messenger chain";
+/// The explicit thread the sender names on the submission. The router takes a
+/// `(Named ...)` thread verbatim into the stored message's `ThreadIdentifier`
+/// (router `signal_message` handling), so sending with this name exercises the
+/// whole 4-field explicit-thread path — CLI parse, daemon stamp, router
+/// verbatim consume, delivery — end to end. The router does not surface the
+/// thread over any socket observation (`RouterMessageTrace` reports only slot
+/// and delivery status); the thread-value assertion (`Named` verbatim vs
+/// absent-derives-direct) lives in the router suite's
+/// `explicit_thread_name_is_used_verbatim_while_absent_thread_derives_direct`.
+const THREAD_NAME: &str = "messenger-launch-plan";
 
 #[test]
 fn message_cli_send_reaches_live_pi_as_a_steer_through_router_and_harness() {
@@ -73,7 +83,7 @@ fn message_cli_send_reaches_live_pi_as_a_steer_through_router_and_harness() {
 
     let output = Command::new(test.binaries().message_cli())
         .env("MESSAGE_SOCKET", test.message_socket(SENDER))
-        .arg(format!("(Send {RECIPIENT} [{MESSAGE_BODY}])"))
+        .arg(format!("(Send {RECIPIENT} [{MESSAGE_BODY}] (Named {THREAD_NAME}))"))
         .output()
         .expect("run sender message CLI");
     assert!(
