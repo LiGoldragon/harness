@@ -125,7 +125,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -250,12 +250,12 @@ dependencies = [
 
 [[package]]
 name = "harness"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "kameo",
  "message",
  "meta-signal-harness",
- "nota",
+ "nota 0.5.1",
  "notify",
  "rkyv",
  "schema-rust 0.7.0 (git+https://github.com/LiGoldragon/schema-rust.git?branch=main)",
@@ -405,7 +405,7 @@ version = "0.6.0"
 source = "git+https://github.com/LiGoldragon/message.git?branch=main#41627bcec1c066a1f699b5beae82c0db39005bbd"
 dependencies = [
  "meta-signal-message",
- "nota",
+ "nota 0.5.1",
  "rkyv",
  "schema-rust 0.7.0 (git+https://github.com/LiGoldragon/schema-rust.git?branch=main)",
  "signal-frame",
@@ -417,10 +417,10 @@ dependencies = [
 
 [[package]]
 name = "meta-signal-harness"
-version = "0.1.0"
-source = "git+https://github.com/LiGoldragon/meta-signal-harness.git?branch=main#b3e45280b84525e6e607088468e2b6bda8e0ff6b"
+version = "0.2.0"
+source = "git+https://github.com/LiGoldragon/meta-signal-harness.git?branch=main#e87b667d44199eca0750d515f6478ed3e15ddd8f"
 dependencies = [
- "nota",
+ "nota 0.5.1",
  "rkyv",
  "signal-frame",
  "signal-harness",
@@ -432,7 +432,7 @@ name = "meta-signal-message"
 version = "0.1.0"
 source = "git+https://github.com/LiGoldragon/meta-signal-message.git?branch=main#9134d4608cab4d3b56810d4ee7ee4aa48d6bfb64"
 dependencies = [
- "nota",
+ "nota 0.5.1",
  "rkyv",
  "schema-rust 0.7.0 (git+https://github.com/LiGoldragon/schema-rust.git?branch=main)",
  "signal-frame",
@@ -477,7 +477,16 @@ name = "nota"
 version = "0.5.1"
 source = "git+https://github.com/LiGoldragon/nota.git?branch=main#ce7c564de0a0518eaa1938d55dccc460a67cadb4"
 dependencies = [
- "nota-derive",
+ "nota-derive 0.3.0",
+ "rkyv",
+]
+
+[[package]]
+name = "nota"
+version = "0.8.0"
+source = "git+https://github.com/LiGoldragon/nota-next.git?rev=18e2e8d0dba37e9e84045af3608585b51f6e3b36#18e2e8d0dba37e9e84045af3608585b51f6e3b36"
+dependencies = [
+ "nota-derive 0.4.0",
  "rkyv",
 ]
 
@@ -485,6 +494,16 @@ dependencies = [
 name = "nota-derive"
 version = "0.3.0"
 source = "git+https://github.com/LiGoldragon/nota.git?branch=main#ce7c564de0a0518eaa1938d55dccc460a67cadb4"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "nota-derive"
+version = "0.4.0"
+source = "git+https://github.com/LiGoldragon/nota-next.git?rev=18e2e8d0dba37e9e84045af3608585b51f6e3b36#18e2e8d0dba37e9e84045af3608585b51f6e3b36"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -648,7 +667,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -672,7 +691,7 @@ version = "0.2.0"
 source = "git+https://github.com/LiGoldragon/schema-language.git?rev=6aae825d668e3f607a2754afa6b7d94e9f246c41#6aae825d668e3f607a2754afa6b7d94e9f246c41"
 dependencies = [
  "blake3",
- "nota",
+ "nota 0.5.1",
  "rkyv",
  "schema-language-cc",
  "thiserror",
@@ -683,7 +702,7 @@ name = "schema-language-cc"
 version = "0.1.0"
 source = "git+https://github.com/LiGoldragon/schema-language.git?rev=6aae825d668e3f607a2754afa6b7d94e9f246c41#6aae825d668e3f607a2754afa6b7d94e9f246c41"
 dependencies = [
- "nota",
+ "nota 0.5.1",
  "prettyplease",
  "proc-macro2",
  "quote",
@@ -696,7 +715,7 @@ name = "schema-rust"
 version = "0.7.0"
 source = "git+https://github.com/LiGoldragon/schema-rust.git?branch=main#f3b4563163dd11ba1cbbcca8081701ab7830b8f5"
 dependencies = [
- "nota",
+ "nota 0.5.1",
  "prettyplease",
  "proc-macro2",
  "quote",
@@ -711,7 +730,7 @@ name = "schema-rust"
 version = "0.7.0"
 source = "git+https://github.com/LiGoldragon/schema-rust.git?rev=255823ab3d0d6c5cab26e26a8b1d60c63c52c7b4#255823ab3d0d6c5cab26e26a8b1d60c63c52c7b4"
 dependencies = [
- "nota",
+ "nota 0.5.1",
  "prettyplease",
  "proc-macro2",
  "quote",
@@ -773,9 +792,9 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 [[package]]
 name = "signal-frame"
 version = "0.3.0"
-source = "git+https://github.com/LiGoldragon/signal-frame.git?branch=main#fd7909d1497b7bb18751521387a1087cd9e7c91c"
+source = "git+https://github.com/LiGoldragon/signal-frame.git?branch=main#f46872e7e8edae5264c892443d415a273b231234"
 dependencies = [
- "nota",
+ "nota 0.8.0",
  "paste",
  "rkyv",
  "signal-frame-macros",
@@ -785,7 +804,7 @@ dependencies = [
 [[package]]
 name = "signal-frame-macros"
 version = "0.1.1"
-source = "git+https://github.com/LiGoldragon/signal-frame.git?branch=main#fd7909d1497b7bb18751521387a1087cd9e7c91c"
+source = "git+https://github.com/LiGoldragon/signal-frame.git?branch=main#f46872e7e8edae5264c892443d415a273b231234"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -794,10 +813,10 @@ dependencies = [
 
 [[package]]
 name = "signal-harness"
-version = "0.3.0"
-source = "git+https://github.com/LiGoldragon/signal-harness.git?branch=main#9d173f50aa74c937c11855e0e2dd3c359090b36f"
+version = "0.4.0"
+source = "git+https://github.com/LiGoldragon/signal-harness.git?branch=main#fe2114713e9d04a96de107e45123782279d9fe1f"
 dependencies = [
- "nota",
+ "nota 0.5.1",
  "rkyv",
  "signal-frame",
  "signal-persona",
@@ -809,7 +828,7 @@ name = "signal-message"
 version = "0.4.0"
 source = "git+https://github.com/LiGoldragon/signal-message.git?branch=main#95343930c2bc91c0d6473a410b47745079dbc907"
 dependencies = [
- "nota",
+ "nota 0.5.1",
  "rkyv",
  "schema-rust 0.7.0 (git+https://github.com/LiGoldragon/schema-rust.git?rev=255823ab3d0d6c5cab26e26a8b1d60c63c52c7b4)",
  "signal-frame",
@@ -819,11 +838,11 @@ dependencies = [
 [[package]]
 name = "signal-persona"
 version = "0.2.0"
-source = "git+https://github.com/LiGoldragon/signal-persona.git?branch=main#2babf1314e2898d7bdbe75124e00f9129cfb8d43"
+source = "git+https://github.com/LiGoldragon/signal-persona.git?branch=main#04593c9a9afdb92d3c55cd908e8b8be3f7c30679"
 dependencies = [
- "nota",
+ "nota 0.5.1",
  "rkyv",
- "schema-rust 0.7.0 (git+https://github.com/LiGoldragon/schema-rust.git?branch=main)",
+ "schema-rust 0.7.0 (git+https://github.com/LiGoldragon/schema-rust.git?rev=255823ab3d0d6c5cab26e26a8b1d60c63c52c7b4)",
  "signal-frame",
 ]
 
@@ -843,7 +862,7 @@ name = "signal-terminal"
 version = "0.2.2"
 source = "git+https://github.com/LiGoldragon/signal-terminal.git?branch=main#9b4406f3506e0354d5ea9079303057cad95d6b1e"
 dependencies = [
- "nota",
+ "nota 0.5.1",
  "rkyv",
  "schema-rust 0.7.0 (git+https://github.com/LiGoldragon/schema-rust.git?branch=main)",
  "signal-frame",
@@ -869,7 +888,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "52d1cfed4120b4d927bf7c0f86d2087a4a7d6027c906d9f9d525a80573b9be51"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -893,7 +912,7 @@ dependencies = [
  "getrandom",
  "once_cell",
  "rustix",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -991,8 +1010,8 @@ dependencies = [
 
 [[package]]
 name = "triad-runtime"
-version = "0.6.1"
-source = "git+https://github.com/LiGoldragon/triad-runtime.git?branch=main#895d2e6b9023b2d901fe1ab20e6f8f431c6113b7"
+version = "0.7.0"
+source = "git+https://github.com/LiGoldragon/triad-runtime.git?branch=main#d323f9024f8490961c687798cf2dad4aea54aa7e"
 dependencies = [
  "kameo",
  "rkyv",
@@ -1085,7 +1104,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

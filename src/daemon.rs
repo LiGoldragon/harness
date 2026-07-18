@@ -44,6 +44,7 @@ use triad_runtime::{
     AcceptedConnection, FrameBody as LengthPrefixedFrameBody, FrameError, LengthPrefixedCodec,
 };
 
+use crate::launch::SessionLauncher;
 use crate::schema::daemon::ComponentDaemon;
 use crate::supervision::{
     HandleSupervisionRequest, ReceivedSupervisionRequest, SupervisionPhase, SupervisionProfile,
@@ -75,6 +76,7 @@ pub struct HarnessProcessDaemon;
 pub struct HarnessEngine {
     instance_configurations: Vec<HarnessRuntimeConfiguration>,
     profile: SupervisionProfile,
+    session_launcher: SessionLauncher,
     instances: OnceCell<BoundHarnessInstances>,
     supervision: OnceCell<ActorRef<SupervisionPhase>>,
 }
@@ -91,6 +93,7 @@ impl HarnessEngine {
                 .map(HarnessRuntimeConfiguration::from_contract)
                 .collect(),
             profile: SupervisionProfile::harness(),
+            session_launcher: SessionLauncher::from_environment(),
             instances: OnceCell::new(),
             supervision: OnceCell::new(),
         }
@@ -285,6 +288,7 @@ impl HarnessEngine {
                 ModelResolutionCatalog::new(&self.instance_configurations)
                     .reply_for_request(request)
             }
+            MetaHarnessRequest::LaunchSession(request) => self.session_launcher.launch(request),
         };
         Ok(reply)
     }

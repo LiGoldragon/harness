@@ -8,6 +8,7 @@ pub mod daemon;
 pub mod delivery;
 pub mod error;
 pub mod harness;
+pub mod launch;
 pub mod meta;
 pub mod pi;
 pub mod runtime;
