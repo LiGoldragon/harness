@@ -19,3 +19,9 @@ input observations, and adapter contracts for interactive agent harnesses.
   perform the adapter-specific action.
 - Durable harness state uses a harness-owned `harness.sema` store through
   `sema-engine` when this crate owns it.
+
+## Protos estate status
+
+Stack: correct-new destination
+Status: active component, current checkout legacy-wired
+This checkout is not proof of correct-new adoption.
