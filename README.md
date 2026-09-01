@@ -1,5 +1,12 @@
 # harness
 
+`flow-id` is the parent-flow identity helper. Run `flow-id codex --flows-root
+ABSOLUTE_DIRECTORY` after Codex provides `CODEX_SESSION_ID`, or `flow-id
+claude --flows-root ABSOLUTE_DIRECTORY --parent-session UUID` when Claude's
+authoritative parent identity is known. It prints only the claimed alias. The
+parent passes that alias as `FLOW_ID` and `flows-root/FLOW_ID` as
+`FLOW_DIRECTORY`; child threads never invoke it.
+
 Typed harness abstraction for Persona.
 
 This crate holds the reusable model for Codex, Claude, and Pi interactive

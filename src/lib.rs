@@ -7,6 +7,7 @@ pub mod configuration;
 pub mod daemon;
 pub mod delivery;
 pub mod error;
+pub mod flow_id;
 pub mod harness;
 pub mod launch;
 pub mod meta;

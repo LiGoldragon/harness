@@ -136,6 +136,7 @@
           harness-daemon-returns-typed-unimplemented = context.cargoTest "daemon" "harness_daemon_returns_typed_unimplemented";
           harness-cli-reaches-working-socket = context.cargoTest "component_cli" "harness_cli_reaches_working_socket_and_prints_typed_reply";
           meta-harness-cli-reaches-policy-socket = context.cargoTest "component_cli" "meta_harness_cli_reaches_policy_socket_and_prints_typed_reply";
+          flow-id = context.cargoTest "flow_id" "codex_extracts_the_literal_23_to_29_candidate_and_prints_only_the_alias";
         }
       );
 
@@ -151,6 +152,10 @@
         meta = {
           type = "app";
           program = "${self.packages.${system}.default}/bin/meta-harness";
+        };
+        flow-id = {
+          type = "app";
+          program = "${self.packages.${system}.default}/bin/flow-id";
         };
       });
 

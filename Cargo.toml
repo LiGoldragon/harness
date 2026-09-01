@@ -1,6 +1,6 @@
 [package]
 name         = "harness"
-version      = "0.2.0"
+version      = "0.3.0"
 edition      = "2024"
 rust-version = "1.89"
 license      = "MIT OR Apache-2.0"
@@ -23,6 +23,10 @@ path = "src/bin/meta_harness.rs"
 [[bin]]
 name = "harness-daemon"
 path = "src/bin/harness_daemon.rs"
+
+[[bin]]
+name = "flow-id"
+path = "src/bin/flow_id.rs"
 
 [[bin]]
 name = "harness-claude-artifact-observer-test"
