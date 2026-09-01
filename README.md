@@ -3,8 +3,10 @@
 `flow-id` is the parent-flow identity helper. Run `flow-id codex --flows-root
 ABSOLUTE_DIRECTORY` after Codex provides `CODEX_SESSION_ID`, or `flow-id
 claude --flows-root ABSOLUTE_DIRECTORY --parent-session UUID` when Claude's
-authoritative parent identity is known. It prints only the claimed alias. The
-parent passes that alias as `FLOW_ID` and `flows-root/FLOW_ID` as
+authoritative parent identity is known. It normalizes the UUID to its 32
+lowercase hexadecimal characters and claims candidates from `[23:29]` onward.
+It prints only the claimed hex alias. The parent passes that alias as `FLOW_ID`
+and `flows-root/FLOW_ID` as
 `FLOW_DIRECTORY`; child threads never invoke it.
 
 Typed harness abstraction for Persona.

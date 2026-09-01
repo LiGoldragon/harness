@@ -2,7 +2,7 @@ use std::{
     fmt,
     fs::{self, File, OpenOptions},
     io::{self, Read, Write},
-    os::unix::fs::PermissionsExt,
+    os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
 };
 
@@ -116,14 +116,15 @@ impl Marker {
             Some("harness=claude") => HarnessKind::Claude,
             _ => return Err(Error::MalformedMarker(path.into())),
         };
-        let identity = normalize_uuid(identity.expect("validated").trim_start_matches("identity="))
-            .map_err(|_| Error::MalformedMarker(path.into()))?;
-        let alias = alias.expect("validated").trim_start_matches("alias=");
-        if alias.is_empty()
-            || alias
-                .bytes()
-                .any(|byte| !(byte == b'-' || byte.is_ascii_alphanumeric()))
+        let identity = identity.expect("validated").trim_start_matches("identity=");
+        if identity.len() != 32
+            || identity.bytes().any(|byte| !byte.is_ascii_hexdigit())
+            || identity.bytes().any(|byte| byte.is_ascii_uppercase())
         {
+            return Err(Error::MalformedMarker(path.into()));
+        }
+        let alias = alias.expect("validated").trim_start_matches("alias=");
+        if alias.is_empty() || alias.bytes().any(|byte| !byte.is_ascii_hexdigit()) {
             return Err(Error::MalformedMarker(path.into()));
         }
         Ok(Self::new(harness, &identity, alias))
@@ -163,7 +164,11 @@ pub fn normalize_uuid(value: &str) -> Result<String> {
             "identity must be one canonical UUID".into(),
         ));
     }
-    Ok(value.to_ascii_lowercase())
+    Ok(value
+        .bytes()
+        .filter(|byte| *byte != b'-')
+        .map(|byte| byte.to_ascii_lowercase() as char)
+        .collect())
 }
 
 enum Lane {
@@ -290,6 +295,7 @@ fn open_marker(path: &Path) -> Result<(File, bool)> {
         .read(true)
         .write(true)
         .create_new(true)
+        .mode(MARKER_MODE)
         .open(path)
     {
         Ok(file) => {

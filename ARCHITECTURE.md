@@ -64,7 +64,8 @@ flowchart LR
   `meta-signal-harness`;
 - `harness-daemon`, the managed runtime daemon that binds the working
   and owner-only meta sockets from a single binary startup record;
-- `flow-id`, the parent-only filesystem claim CLI for one shared flow alias;
+- `flow-id`, the parent-only filesystem claim CLI for one normalized-hex shared
+  flow alias;
 - harness identity records;
 - lifecycle state;
 - transcript events;

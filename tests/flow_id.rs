@@ -9,9 +9,9 @@ use std::{
 
 use tempfile::TempDir;
 
-const CODEX_SESSION: &str = "01a05e95-1234-5678-9abc-def012345678";
-const CLAUDE_SESSION: &str = "02b06f96-4321-8765-cba9-def012345678";
-const FIRST_ALIAS: &str = "-def01";
+const CODEX_SESSION: &str = "01a05e95-1234-5678-9abc-000715d46abc";
+const CLAUDE_SESSION: &str = "02b06f96-4321-8765-cba9-000715d46abc";
+const FIRST_ALIAS: &str = "715d46";
 
 fn flows_root() -> TempDir {
     tempfile::tempdir().expect("flows root")
@@ -57,17 +57,28 @@ fn marker(root: &Path, alias: &str) -> PathBuf {
 }
 
 #[test]
-fn codex_extracts_the_literal_23_to_29_candidate_and_prints_only_the_alias() {
+fn codex_extracts_the_normalized_hex_23_to_29_candidate_and_prints_only_the_alias() {
     let root = flows_root();
-    assert_eq!(success_alias(codex(root.path(), CODEX_SESSION)), "-def01\n");
+    let alias = success_alias(codex(root.path(), CODEX_SESSION));
+    assert_eq!(alias, "715d46\n");
+    assert!(alias.trim().bytes().all(|byte| byte.is_ascii_hexdigit()));
     assert!(root.path().join(FIRST_ALIAS).is_dir());
+}
+
+#[test]
+fn uppercase_uuid_normalizes_to_the_same_literal_hex_alias() {
+    let root = flows_root();
+    assert_eq!(
+        success_alias(codex(root.path(), &CODEX_SESSION.to_ascii_uppercase())),
+        "715d46\n"
+    );
 }
 
 #[test]
 fn same_codex_session_is_idempotent_across_cold_processes() {
     let root = flows_root();
-    assert_eq!(success_alias(codex(root.path(), CODEX_SESSION)), "-def01\n");
-    assert_eq!(success_alias(codex(root.path(), CODEX_SESSION)), "-def01\n");
+    assert_eq!(success_alias(codex(root.path(), CODEX_SESSION)), "715d46\n");
+    assert_eq!(success_alias(codex(root.path(), CODEX_SESSION)), "715d46\n");
     assert_eq!(
         fs::read_dir(root.path()).expect("read claims").count(),
         2,
@@ -81,10 +92,10 @@ fn unmarked_legacy_lane_is_a_collision_that_extends_the_candidate() {
     fs::create_dir(root.path().join(FIRST_ALIAS)).expect("legacy lane");
     assert_eq!(
         success_alias(codex(root.path(), CODEX_SESSION)),
-        "-def012\n"
+        "715d46a\n"
     );
     assert!(root.path().join(FIRST_ALIAS).is_dir());
-    assert!(root.path().join("-def012").is_dir());
+    assert!(root.path().join("715d46a").is_dir());
 }
 
 #[test]
@@ -127,7 +138,7 @@ fn unsafe_roots_and_permissions_are_rejected() {
 #[test]
 fn claimed_lanes_and_markers_reject_unsafe_replacement() {
     let root = flows_root();
-    assert_eq!(success_alias(codex(root.path(), CODEX_SESSION)), "-def01\n");
+    assert_eq!(success_alias(codex(root.path(), CODEX_SESSION)), "715d46\n");
     let lane = root.path().join(FIRST_ALIAS);
     fs::set_permissions(&lane, fs::Permissions::from_mode(0o755)).expect("unsafe lane mode");
     assert!(!codex(root.path(), CODEX_SESSION).status.success());
@@ -175,9 +186,9 @@ fn concurrent_same_and_different_sessions_claim_without_overwriting() {
     let root_path = root.path().to_owned();
     let start = std::sync::Arc::new(Barrier::new(4));
     let sessions = [
-        "10a05e95-1234-5678-9abc-00000a123456",
-        "10a05e95-1234-5678-9abc-00000a123456",
-        "20b06f96-4321-8765-cba9-00000b123456",
+        "10a05e95-1234-5678-9abc-abc000000a12",
+        "10a05e95-1234-5678-9abc-abc000000a12",
+        "20b06f96-4321-8765-cba9-def000000b12",
     ];
     let workers = sessions.map(|session| {
         let root = root_path.clone();
@@ -195,17 +206,17 @@ fn concurrent_same_and_different_sessions_claim_without_overwriting() {
         "different identities never overwrite"
     );
     assert!(
-        matches!(aliases[0].as_str(), "-00000\n" | "-00000a\n"),
+        matches!(aliases[0].as_str(), "000000\n" | "000000a\n"),
         "same identity received an unexpected extension: {}",
         aliases[0]
     );
     assert!(
-        matches!(aliases[2].as_str(), "-00000\n" | "-00000b\n"),
+        matches!(aliases[2].as_str(), "000000\n" | "000000b\n"),
         "different identity received an unexpected extension: {}",
         aliases[2]
     );
-    assert!(root.path().join("-00000").is_dir());
-    assert!(root.path().join("-00000b").is_dir());
+    assert!(root.path().join("000000").is_dir());
+    assert!(root.path().join("000000a").is_dir() || root.path().join("000000b").is_dir());
 }
 
 #[test]
@@ -220,7 +231,7 @@ fn claude_uses_only_the_explicit_parent_session() {
         .env("CODEX_SESSION_ID", "not-a-uuid")
         .output()
         .expect("run flow-id claude");
-    assert_eq!(success_alias(output), "-def01\n");
+    assert_eq!(success_alias(output), "715d46\n");
 }
 
 #[test]
