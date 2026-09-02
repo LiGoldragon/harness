@@ -63,6 +63,15 @@
                 cargoTestExtraArgs = "--test ${testTarget} ${testName} -- --exact";
               }
             );
+          cargoLibTest =
+            testName:
+            craneLib.cargoTest (
+              commonArgs
+              // {
+                inherit cargoArtifacts;
+                cargoTestExtraArgs = "--lib ${testName} -- --exact";
+              }
+            );
         in
         {
           inherit
@@ -72,6 +81,7 @@
             commonArgs
             cargoArtifacts
             cargoTest
+            cargoLibTest
             ;
         };
     in
@@ -137,6 +147,7 @@
           harness-cli-reaches-working-socket = context.cargoTest "component_cli" "harness_cli_reaches_working_socket_and_prints_typed_reply";
           meta-harness-cli-reaches-policy-socket = context.cargoTest "component_cli" "meta_harness_cli_reaches_policy_socket_and_prints_typed_reply";
           flow-id = context.cargoTest "flow_id" "codex_extracts_the_normalized_hex_23_to_29_candidate_and_prints_only_the_alias";
+          flow-id-publication-race = context.cargoLibTest "flow_id::tests::first_creator_publishes_complete_marker_only_after_the_stable_claim_lock";
         }
       );
 

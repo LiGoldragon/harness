@@ -31,17 +31,6 @@ fn codex(root: &Path, session: &str) -> std::process::Output {
         .expect("run flow-id codex")
 }
 
-fn claude(root: &Path, session: &str) -> std::process::Output {
-    flow_id()
-        .arg("claude")
-        .arg("--flows-root")
-        .arg(root)
-        .arg("--parent-session")
-        .arg(session)
-        .output()
-        .expect("run flow-id claude")
-}
-
 fn success_alias(output: std::process::Output) -> String {
     assert!(
         output.status.success(),
@@ -54,6 +43,10 @@ fn success_alias(output: std::process::Output) -> String {
 
 fn marker(root: &Path, alias: &str) -> PathBuf {
     root.join(format!(".{alias}.flow-id"))
+}
+
+fn claim_lock(root: &Path, alias: &str) -> PathBuf {
+    root.join(format!(".{alias}.flow-id.lock"))
 }
 
 #[test]
@@ -81,8 +74,16 @@ fn same_codex_session_is_idempotent_across_cold_processes() {
     assert_eq!(success_alias(codex(root.path(), CODEX_SESSION)), "715d46\n");
     assert_eq!(
         fs::read_dir(root.path()).expect("read claims").count(),
-        2,
-        "one marker and one lane remain"
+        3,
+        "one stable private lock, one marker, and one lane remain"
+    );
+    assert_eq!(
+        fs::metadata(claim_lock(root.path(), FIRST_ALIAS))
+            .expect("stable claim lock")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600,
     );
 }
 
@@ -148,6 +149,13 @@ fn claimed_lanes_and_markers_reject_unsafe_replacement() {
     fs::remove_file(&claim).expect("remove claim marker");
     symlink(root.path().join("missing-target"), &claim).expect("unsafe marker symlink");
     assert!(!codex(root.path(), CODEX_SESSION).status.success());
+
+    fs::remove_file(&claim).expect("remove unsafe marker");
+    fs::remove_dir(&lane).expect("remove formerly claimed lane");
+    let lock = claim_lock(root.path(), FIRST_ALIAS);
+    fs::remove_file(&lock).expect("remove stable claim lock");
+    symlink(root.path().join("missing-target"), &lock).expect("unsafe claim lock symlink");
+    assert!(!codex(root.path(), CODEX_SESSION).status.success());
 }
 
 #[test]
@@ -157,6 +165,7 @@ fn missing_invalid_and_ambiguous_identities_are_rejected_without_a_lane() {
         .arg("codex")
         .arg("--flows-root")
         .arg(root.path())
+        .env_remove("CODEX_SESSION_ID")
         .output()
         .expect("run missing codex identity");
     assert!(!missing.status.success());
@@ -217,6 +226,18 @@ fn concurrent_same_and_different_sessions_claim_without_overwriting() {
     );
     assert!(root.path().join("000000").is_dir());
     assert!(root.path().join("000000a").is_dir() || root.path().join("000000b").is_dir());
+    for alias in ["000000", "000000a", "000000b"] {
+        let marker_path = marker(root.path(), alias);
+        if marker_path.exists() {
+            let metadata = fs::metadata(&marker_path).expect("complete concurrent marker");
+            assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+            assert!(
+                fs::read_to_string(marker_path)
+                    .expect("complete concurrent marker content")
+                    .starts_with("version=1\n"),
+            );
+        }
+    }
 }
 
 #[test]

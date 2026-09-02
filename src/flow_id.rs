@@ -4,12 +4,14 @@ use std::{
     io::{self, Read, Write},
     os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 const MARKER_VERSION: &str = "1";
 const FIRST_CANDIDATE_END: usize = 29;
 const FLOW_DIRECTORY_MODE: u32 = 0o700;
 const MARKER_MODE: u32 = 0o600;
+static TEMP_MARKER_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HarnessKind {
@@ -215,21 +217,44 @@ fn claim_candidate(
 ) -> Result<Candidate> {
     let marker_path = marker_path(root, alias);
     let expected = Marker::new(harness, identity, alias);
-    let (mut marker_file, created) = open_marker(&marker_path)?;
-    marker_file.lock().map_err(|source| Error::Filesystem {
-        path: marker_path.clone(),
+    let lock_path = claim_lock_path(root, alias);
+    let lock_file = open_claim_lock(&lock_path)?;
+    lock_file.lock().map_err(|source| Error::Filesystem {
+        path: lock_path.clone(),
         source,
     })?;
 
-    if !marker_path.exists() {
-        return Ok(Candidate::Collision);
-    }
+    #[cfg(test)]
+    test_hook::after_claim_lock();
 
-    let marker = if created {
-        write_marker(&marker_path, &mut marker_file, &expected)?;
-        expected.clone()
-    } else {
-        read_marker(&marker_path, &mut marker_file)?
+    let lane = root.join(alias);
+    let marker = match read_marker(&marker_path)? {
+        Some(marker) => marker,
+        None => match fs::symlink_metadata(&lane) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+                return Err(Error::UnsafeLane(lane));
+            }
+            Ok(_) => return Ok(Candidate::Collision),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                if publish_marker(root, alias, &expected)? {
+                    expected.clone()
+                } else {
+                    // Another writer occupied the marker name while the stable
+                    // lock was held.  Inspect it rather than treating it as a
+                    // benign collision, so malformed metadata remains closed.
+                    read_marker(&marker_path)?.ok_or_else(|| Error::Filesystem {
+                        path: marker_path.clone(),
+                        source: io::Error::new(
+                            io::ErrorKind::NotFound,
+                            "flow marker disappeared during claim",
+                        ),
+                    })?
+                }
+            }
+            Err(source) => {
+                return Err(Error::Filesystem { path: lane, source });
+            }
+        },
     };
 
     if marker.alias != alias {
@@ -239,19 +264,11 @@ fn claim_candidate(
         return Ok(Candidate::Collision);
     }
 
-    let lane = root.join(alias);
     match fs::symlink_metadata(&lane) {
         Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
             Err(Error::UnsafeLane(lane))
         }
         Ok(metadata) => {
-            if created {
-                fs::remove_file(&marker_path).map_err(|source| Error::Filesystem {
-                    path: marker_path,
-                    source,
-                })?;
-                return Ok(Candidate::Collision);
-            }
             validate_lane(&lane, &metadata)?;
             Ok(Candidate::Claimed)
         }
@@ -277,20 +294,7 @@ fn claim_candidate(
     }
 }
 
-fn open_marker(path: &Path) -> Result<(File, bool)> {
-    if path.exists() {
-        validate_marker_path(path)?;
-        return OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(path)
-            .map(|file| (file, false))
-            .map_err(|source| Error::Filesystem {
-                path: path.into(),
-                source,
-            });
-    }
-
+fn open_claim_lock(path: &Path) -> Result<File> {
     match OpenOptions::new()
         .read(true)
         .write(true)
@@ -305,14 +309,85 @@ fn open_marker(path: &Path) -> Result<(File, bool)> {
                     source,
                 },
             )?;
-            Ok((file, true))
+            Ok(file)
         }
-        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => open_marker(path),
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            validate_marker_path(path)?;
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(path)
+                .map_err(|source| Error::Filesystem {
+                    path: path.into(),
+                    source,
+                })
+        }
         Err(source) => Err(Error::Filesystem {
             path: path.into(),
             source,
         }),
     }
+}
+
+fn publish_marker(root: &Path, alias: &str, marker: &Marker) -> Result<bool> {
+    let marker_path = marker_path(root, alias);
+    let (temporary_path, mut temporary_file) = create_temporary_marker(root, alias)?;
+    write_marker(&temporary_path, &mut temporary_file, marker)?;
+    drop(temporary_file);
+
+    match fs::hard_link(&temporary_path, &marker_path) {
+        Ok(()) => {
+            fs::remove_file(&temporary_path).map_err(|source| Error::Filesystem {
+                path: temporary_path,
+                source,
+            })?;
+            Ok(true)
+        }
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            fs::remove_file(&temporary_path).map_err(|source| Error::Filesystem {
+                path: temporary_path,
+                source,
+            })?;
+            Ok(false)
+        }
+        Err(source) => Err(Error::Filesystem {
+            path: marker_path,
+            source,
+        }),
+    }
+}
+
+fn create_temporary_marker(root: &Path, alias: &str) -> Result<(PathBuf, File)> {
+    for _ in 0..64 {
+        let sequence = TEMP_MARKER_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let path = root.join(format!(
+            ".{alias}.flow-id.tmp.{}.{}",
+            std::process::id(),
+            sequence
+        ));
+        match OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .mode(MARKER_MODE)
+            .open(&path)
+        {
+            Ok(file) => {
+                fs::set_permissions(&path, fs::Permissions::from_mode(MARKER_MODE)).map_err(
+                    |source| Error::Filesystem {
+                        path: path.clone(),
+                        source,
+                    },
+                )?;
+                return Ok((path, file));
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(source) => {
+                return Err(Error::Filesystem { path, source });
+            }
+        }
+    }
+    Err(Error::CandidateExhausted)
 }
 
 fn write_marker(path: &Path, file: &mut File, marker: &Marker) -> Result<()> {
@@ -324,19 +399,39 @@ fn write_marker(path: &Path, file: &mut File, marker: &Marker) -> Result<()> {
         })
 }
 
-fn read_marker(path: &Path, file: &mut File) -> Result<Marker> {
-    validate_marker_path(path)?;
-    let mut text = String::new();
-    file.read_to_string(&mut text)
-        .map_err(|source| Error::Filesystem {
+fn read_marker(path: &Path) -> Result<Option<Marker>> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            Err(Error::UnsafeMarker(path.into()))
+        }
+        Ok(_) => {
+            validate_marker_path(path)?;
+            let mut file = File::open(path).map_err(|source| Error::Filesystem {
+                path: path.into(),
+                source,
+            })?;
+            let mut text = String::new();
+            file.read_to_string(&mut text)
+                .map_err(|source| Error::Filesystem {
+                    path: path.into(),
+                    source,
+                })?;
+            Marker::decode(path, &text).map(Some)
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(source) => Err(Error::Filesystem {
             path: path.into(),
             source,
-        })?;
-    Marker::decode(path, &text)
+        }),
+    }
 }
 
 fn marker_path(root: &Path, alias: &str) -> PathBuf {
     root.join(format!(".{alias}.flow-id"))
+}
+
+fn claim_lock_path(root: &Path, alias: &str) -> PathBuf {
+    root.join(format!(".{alias}.flow-id.lock"))
 }
 
 fn validate_root(path: &Path) -> Result<()> {
@@ -386,4 +481,98 @@ fn validate_lane(path: &Path, metadata: &fs::Metadata) -> Result<()> {
         return Err(Error::UnsafeLane(path.into()));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod test_hook {
+    use std::sync::{
+        Mutex, OnceLock,
+        mpsc::{Receiver, SyncSender},
+    };
+
+    struct ClaimLockHook {
+        entered: SyncSender<()>,
+        resume: Receiver<()>,
+    }
+
+    fn hook() -> &'static Mutex<Option<ClaimLockHook>> {
+        static HOOK: OnceLock<Mutex<Option<ClaimLockHook>>> = OnceLock::new();
+        HOOK.get_or_init(|| Mutex::new(None))
+    }
+
+    pub(super) fn install(entered: SyncSender<()>, resume: Receiver<()>) {
+        *hook().lock().expect("claim lock hook mutex") = Some(ClaimLockHook { entered, resume });
+    }
+
+    pub(super) fn after_claim_lock() {
+        let hook = hook().lock().expect("claim lock hook mutex").take();
+        if let Some(hook) = hook {
+            hook.entered.send(()).expect("claim lock hook entered");
+            hook.resume.recv().expect("claim lock hook resume");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{fs, sync::mpsc, thread};
+
+    use tempfile::tempdir;
+
+    use super::{HarnessKind, Marker, claim, marker_path, test_hook};
+
+    #[test]
+    fn first_creator_publishes_complete_marker_only_after_the_stable_claim_lock() {
+        let root = tempdir().expect("flows root");
+        let (entered_sender, entered_receiver) = mpsc::sync_channel(0);
+        let (resume_sender, resume_receiver) = mpsc::sync_channel(0);
+        test_hook::install(entered_sender, resume_receiver);
+
+        let root_path = root.path().to_owned();
+        let claimant = thread::spawn(move || {
+            claim(
+                HarnessKind::Codex,
+                &root_path,
+                "01a05e95-1234-5678-9abc-000715d46abc",
+            )
+        });
+
+        entered_receiver
+            .recv()
+            .expect("first claimant holds stable lock");
+        let marker_path = marker_path(root.path(), "715d46");
+        assert!(
+            !marker_path.exists(),
+            "no empty or partial marker is visible while publication is paused"
+        );
+        let follower_root = root.path().to_owned();
+        let follower = thread::spawn(move || {
+            claim(
+                HarnessKind::Codex,
+                &follower_root,
+                "01a05e95-1234-5678-9abc-000715d46abc",
+            )
+        });
+        resume_sender.send(()).expect("resume publication");
+
+        assert_eq!(
+            claimant
+                .join()
+                .expect("claimant thread")
+                .expect("first claim succeeds"),
+            "715d46"
+        );
+        assert_eq!(
+            follower
+                .join()
+                .expect("follower thread")
+                .expect("follower claim succeeds"),
+            "715d46"
+        );
+        let marker_text = fs::read_to_string(&marker_path).expect("published marker");
+        assert!(
+            Marker::decode(&marker_path, &marker_text).is_ok(),
+            "the first visible marker is complete metadata"
+        );
+    }
 }

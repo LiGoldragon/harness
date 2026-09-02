@@ -65,7 +65,8 @@ flowchart LR
 - `harness-daemon`, the managed runtime daemon that binds the working
   and owner-only meta sockets from a single binary startup record;
 - `flow-id`, the parent-only filesystem claim CLI for one normalized-hex shared
-  flow alias;
+  flow alias, using a stable private lock and complete-or-absent marker
+  publication;
 - harness identity records;
 - lifecycle state;
 - transcript events;
@@ -322,6 +323,7 @@ tests/                    harness smoke, daemon, CLI, and actor-runtime tests
 |---|---|
 | Harness identity projection keeps full, redacted, and hidden views distinct. | `nix flake check .#harness-identity-projection-views` |
 | A parent claims one stable alias from its Codex UUID and prints no other stdout. | `nix flake check .#flow-id` |
+| A first creator never exposes a partial marker to a concurrent claimant. | `nix flake check .#flow-id-publication-race` |
 | Harness identity projection cannot collapse back to one always-full record. | `nix flake check .#harness-identity-projection-source-constraint` |
 | Fixture-only human terminal endpoints cannot claim production delivery. | `nix flake check .#terminal-fixture-endpoint-not-production-delivery` |
 | `HarnessKind` has exactly four variants and no fifth. | `nix flake check .#harness-kind-includes-all-four-variants` |

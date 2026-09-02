@@ -9,6 +9,10 @@ It prints only the claimed hex alias. The parent passes that alias as `FLOW_ID`
 and `flows-root/FLOW_ID` as
 `FLOW_DIRECTORY`; child threads never invoke it.
 
+Each alias has a private stable claim lock and a private versioned marker. The
+helper takes the lock before reading marker contents, writes marker metadata to
+a same-directory private temporary file, and publishes only a complete marker.
+
 Typed harness abstraction for Persona.
 
 This crate holds the reusable model for Codex, Claude, and Pi interactive
