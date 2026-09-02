@@ -8,7 +8,8 @@ use std::{
 };
 
 const MARKER_VERSION: &str = "1";
-const FIRST_CANDIDATE_END: usize = 29;
+const FIRST_CANDIDATE_LENGTH: usize = 6;
+const CODEX_CANDIDATE_START: usize = 23;
 const FLOW_DIRECTORY_MODE: u32 = 0o700;
 const MARKER_MODE: u32 = 0o600;
 static TEMP_MARKER_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -134,11 +135,14 @@ impl Marker {
 }
 
 pub fn claim(harness: HarnessKind, flows_root: &Path, identity: &str) -> Result<String> {
-    let identity = normalize_uuid(identity)?;
+    let (identity, candidate_start) = match harness {
+        HarnessKind::Codex => (normalize_uuid(identity)?, CODEX_CANDIDATE_START),
+        HarnessKind::Claude => (normalize_claude_parent_uuid_v4(identity)?, 0),
+    };
     validate_root(flows_root)?;
 
-    for end in FIRST_CANDIDATE_END..=identity.len() {
-        let alias = &identity[23..end];
+    for end in candidate_start + FIRST_CANDIDATE_LENGTH..=identity.len() {
+        let alias = &identity[candidate_start..end];
         match inspect_lane(flows_root, alias)? {
             Lane::Legacy => continue,
             Lane::Missing | Lane::Owned => {
@@ -170,6 +174,29 @@ pub fn normalize_uuid(value: &str) -> Result<String> {
         .bytes()
         .filter(|byte| *byte != b'-')
         .map(|byte| byte.to_ascii_lowercase() as char)
+        .collect())
+}
+
+fn normalize_claude_parent_uuid_v4(value: &str) -> Result<String> {
+    let canonical_uuid = value.len() == 36
+        && value.bytes().enumerate().all(|(index, byte)| {
+            if matches!(index, 8 | 13 | 18 | 23) {
+                byte == b'-'
+            } else {
+                byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()
+            }
+        });
+    let version_is_v4 = value.as_bytes().get(14) == Some(&b'4');
+    let rfc4122_variant = matches!(value.as_bytes().get(19), Some(b'8' | b'9' | b'a' | b'b'));
+    if !canonical_uuid || !version_is_v4 || !rfc4122_variant {
+        return Err(Error::Argument(
+            "Claude parent session must be one canonical UUIDv4".into(),
+        ));
+    }
+    Ok(value
+        .bytes()
+        .filter(|byte| *byte != b'-')
+        .map(char::from)
         .collect())
 }
 
@@ -486,8 +513,8 @@ fn validate_lane(path: &Path, metadata: &fs::Metadata) -> Result<()> {
 #[cfg(test)]
 mod test_hook {
     use std::sync::{
-        Mutex, OnceLock,
         mpsc::{Receiver, SyncSender},
+        Mutex, OnceLock,
     };
 
     struct ClaimLockHook {
@@ -519,10 +546,10 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use super::{HarnessKind, Marker, claim, marker_path, test_hook};
+    use super::{claim, marker_path, test_hook, HarnessKind, Marker};
 
     #[test]
-    fn first_creator_publishes_complete_marker_only_after_the_stable_claim_lock() {
+    fn claude_first_creator_publishes_complete_marker_only_after_the_stable_claim_lock() {
         let root = tempdir().expect("flows root");
         let (entered_sender, entered_receiver) = mpsc::sync_channel(0);
         let (resume_sender, resume_receiver) = mpsc::sync_channel(0);
@@ -531,16 +558,16 @@ mod tests {
         let root_path = root.path().to_owned();
         let claimant = thread::spawn(move || {
             claim(
-                HarnessKind::Codex,
+                HarnessKind::Claude,
                 &root_path,
-                "01a05e95-1234-5678-9abc-000715d46abc",
+                "a1b2c3d4-e5f6-4a78-9abc-def012345678",
             )
         });
 
         entered_receiver
             .recv()
             .expect("first claimant holds stable lock");
-        let marker_path = marker_path(root.path(), "715d46");
+        let marker_path = marker_path(root.path(), "a1b2c3");
         assert!(
             !marker_path.exists(),
             "no empty or partial marker is visible while publication is paused"
@@ -548,9 +575,9 @@ mod tests {
         let follower_root = root.path().to_owned();
         let follower = thread::spawn(move || {
             claim(
-                HarnessKind::Codex,
+                HarnessKind::Claude,
                 &follower_root,
-                "01a05e95-1234-5678-9abc-000715d46abc",
+                "a1b2c3d4-e5f6-4a78-9abc-def012345678",
             )
         });
         resume_sender.send(()).expect("resume publication");
@@ -560,14 +587,14 @@ mod tests {
                 .join()
                 .expect("claimant thread")
                 .expect("first claim succeeds"),
-            "715d46"
+            "a1b2c3"
         );
         assert_eq!(
             follower
                 .join()
                 .expect("follower thread")
                 .expect("follower claim succeeds"),
-            "715d46"
+            "a1b2c3"
         );
         let marker_text = fs::read_to_string(&marker_path).expect("published marker");
         assert!(

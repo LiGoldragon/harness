@@ -1,6 +1,6 @@
 use std::{
     fs,
-    os::unix::fs::{PermissionsExt, symlink},
+    os::unix::fs::{symlink, PermissionsExt},
     path::{Path, PathBuf},
     process::Command,
     sync::Barrier,
@@ -10,8 +10,9 @@ use std::{
 use tempfile::TempDir;
 
 const CODEX_SESSION: &str = "01a05e95-1234-5678-9abc-000715d46abc";
-const CLAUDE_SESSION: &str = "02b06f96-4321-8765-cba9-000715d46abc";
+const CLAUDE_SESSION: &str = "a1b2c3d4-e5f6-4a78-9abc-def012345678";
 const FIRST_ALIAS: &str = "715d46";
+const CLAUDE_FIRST_ALIAS: &str = "a1b2c3";
 
 fn flows_root() -> TempDir {
     tempfile::tempdir().expect("flows root")
@@ -29,6 +30,17 @@ fn codex(root: &Path, session: &str) -> std::process::Output {
         .env("CODEX_SESSION_ID", session)
         .output()
         .expect("run flow-id codex")
+}
+
+fn claude(root: &Path, parent_session: &str) -> std::process::Output {
+    flow_id()
+        .arg("claude")
+        .arg("--flows-root")
+        .arg(root)
+        .arg("--parent-session")
+        .arg(parent_session)
+        .output()
+        .expect("run flow-id claude")
 }
 
 fn success_alias(output: std::process::Output) -> String {
@@ -181,12 +193,10 @@ fn missing_invalid_and_ambiguous_identities_are_rejected_without_a_lane() {
         .output()
         .expect("run ambiguous parent identity");
     assert!(!ambiguous.status.success());
-    assert!(
-        fs::read_dir(root.path())
-            .expect("empty root")
-            .next()
-            .is_none()
-    );
+    assert!(fs::read_dir(root.path())
+        .expect("empty root")
+        .next()
+        .is_none());
 }
 
 #[test]
@@ -231,11 +241,9 @@ fn concurrent_same_and_different_sessions_claim_without_overwriting() {
         if marker_path.exists() {
             let metadata = fs::metadata(&marker_path).expect("complete concurrent marker");
             assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
-            assert!(
-                fs::read_to_string(marker_path)
-                    .expect("complete concurrent marker content")
-                    .starts_with("version=1\n"),
-            );
+            assert!(fs::read_to_string(marker_path)
+                .expect("complete concurrent marker content")
+                .starts_with("version=1\n"),);
         }
     }
 }
@@ -252,7 +260,97 @@ fn claude_uses_only_the_explicit_parent_session() {
         .env("CODEX_SESSION_ID", "not-a-uuid")
         .output()
         .expect("run flow-id claude");
-    assert_eq!(success_alias(output), "715d46\n");
+    assert_eq!(success_alias(output), "a1b2c3\n");
+}
+
+#[test]
+fn claude_uses_the_first_six_literal_characters_of_its_canonical_v4_parent_session() {
+    let root = flows_root();
+    let output = claude(root.path(), CLAUDE_SESSION);
+    assert_eq!(success_alias(output), "a1b2c3\n");
+    assert!(root.path().join(CLAUDE_FIRST_ALIAS).is_dir());
+}
+
+#[test]
+fn claude_rejects_noncanonical_and_non_v4_parent_sessions_without_claiming_a_lane() {
+    let root = flows_root();
+    for parent_session in [
+        "a1b2c3d4-e5f6-1a78-9abc-def012345678",
+        "a1b2c3d4-e5f6-5a78-9abc-def012345678",
+        "A1B2C3D4-E5F6-4A78-9ABC-DEF012345678",
+        "a1b2c3d4e5f64a789abcdef012345678",
+    ] {
+        assert!(
+            !claude(root.path(), parent_session).status.success(),
+            "invalid Claude parent session unexpectedly succeeded: {parent_session}"
+        );
+    }
+    assert!(fs::read_dir(root.path())
+        .expect("empty root")
+        .next()
+        .is_none());
+}
+
+#[test]
+fn claude_claim_is_idempotent_and_keeps_private_marker_and_lock_permissions() {
+    let root = flows_root();
+    assert_eq!(
+        success_alias(claude(root.path(), CLAUDE_SESSION)),
+        "a1b2c3\n"
+    );
+    assert_eq!(
+        success_alias(claude(root.path(), CLAUDE_SESSION)),
+        "a1b2c3\n"
+    );
+    assert_eq!(
+        fs::read_to_string(marker(root.path(), CLAUDE_FIRST_ALIAS)).expect("Claude marker"),
+        "version=1\nharness=claude\nidentity=a1b2c3d4e5f64a789abcdef012345678\nalias=a1b2c3\n"
+    );
+    assert_eq!(
+        fs::metadata(claim_lock(root.path(), CLAUDE_FIRST_ALIAS))
+            .expect("stable Claude claim lock")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600,
+    );
+    assert_eq!(
+        fs::metadata(root.path().join(CLAUDE_FIRST_ALIAS))
+            .expect("Claude lane")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o700,
+    );
+}
+
+#[test]
+fn claude_extends_the_next_literal_hex_character_when_its_first_six_are_taken() {
+    let root = flows_root();
+    fs::create_dir(root.path().join(CLAUDE_FIRST_ALIAS)).expect("legacy Claude collision");
+    assert_eq!(
+        success_alias(claude(root.path(), CLAUDE_SESSION)),
+        "a1b2c3d\n"
+    );
+    assert!(root.path().join(CLAUDE_FIRST_ALIAS).is_dir());
+    assert!(root.path().join("a1b2c3d").is_dir());
+}
+
+#[test]
+fn claude_does_not_adopt_a_codex_marker_with_the_same_alias() {
+    let root = flows_root();
+    let codex_session = "01a05e95-1234-5678-9abc-000a1b2c3def";
+    assert_eq!(success_alias(codex(root.path(), codex_session)), "a1b2c3\n");
+    assert_eq!(
+        success_alias(claude(root.path(), CLAUDE_SESSION)),
+        "a1b2c3d\n"
+    );
+    assert!(fs::read_to_string(marker(root.path(), CLAUDE_FIRST_ALIAS))
+        .expect("Codex marker")
+        .contains("harness=codex\n"));
+    assert!(fs::read_to_string(marker(root.path(), "a1b2c3d"))
+        .expect("Claude marker")
+        .contains("harness=claude\n"));
 }
 
 #[test]
@@ -265,10 +363,8 @@ fn child_is_not_a_helper_mode_and_cannot_create_a_child_lane() {
         .output()
         .expect("run unsupported helper mode");
     assert!(!output.status.success());
-    assert!(
-        fs::read_dir(root.path())
-            .expect("empty root")
-            .next()
-            .is_none()
-    );
+    assert!(fs::read_dir(root.path())
+        .expect("empty root")
+        .next()
+        .is_none());
 }

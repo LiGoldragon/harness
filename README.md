@@ -3,11 +3,13 @@
 `flow-id` is the parent-flow identity helper. Run `flow-id codex --flows-root
 ABSOLUTE_DIRECTORY` after Codex provides `CODEX_SESSION_ID`, or `flow-id
 claude --flows-root ABSOLUTE_DIRECTORY --parent-session UUID` when Claude's
-authoritative parent identity is known. It normalizes the UUID to its 32
-lowercase hexadecimal characters and claims candidates from `[23:29]` onward.
-It prints only the claimed hex alias. The parent passes that alias as `FLOW_ID`
-and `flows-root/FLOW_ID` as
-`FLOW_DIRECTORY`; child threads never invoke it.
+authoritative parent identity is known. Codex normalizes its UUID and claims
+from `[23:29]` onward. Claude accepts only a canonical lowercase RFC 4122
+UUIDv4 parent session and claims its first six literal hexadecimal characters.
+Both extend the candidate by the following eligible hexadecimal character only
+when a lane collides. It prints only the claimed hex alias. The parent passes
+that alias as `FLOW_ID` and `flows-root/FLOW_ID` as `FLOW_DIRECTORY`; child
+threads never invoke it.
 
 Each alias has a private stable claim lock and a private versioned marker. The
 helper takes the lock before reading marker contents, writes marker metadata to

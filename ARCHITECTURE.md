@@ -64,8 +64,10 @@ flowchart LR
   `meta-signal-harness`;
 - `harness-daemon`, the managed runtime daemon that binds the working
   and owner-only meta sockets from a single binary startup record;
-- `flow-id`, the parent-only filesystem claim CLI for one normalized-hex shared
-  flow alias, using a stable private lock and complete-or-absent marker
+- `flow-id`, the parent-only filesystem claim CLI for one shared flow alias:
+  Codex claims normalized UUID characters `[23:29]`, while Claude claims the
+  first six literal hexadecimal characters of a canonical UUIDv4 parent
+  session. Both use a stable private lock and complete-or-absent marker
   publication;
 - harness identity records;
 - lifecycle state;
@@ -304,7 +306,7 @@ src/main.rs               ordinary signal-harness CLI
 src/bin/meta_harness.rs   meta-signal-harness CLI
 src/bin/harness_daemon.rs managed daemon entrypoint
 src/bin/flow_id.rs        parent-flow identity claim CLI
-src/flow_id.rs            UUID normalization and atomic lane claim protocol
+src/flow_id.rs            harness-specific UUID validation and atomic lane claim protocol
 src/client.rs             ordinary CLI client transport
 src/meta.rs               meta CLI client transport
 src/configuration.rs      BindingSurface over HarnessDaemonConfiguration
@@ -322,8 +324,9 @@ tests/                    harness smoke, daemon, CLI, and actor-runtime tests
 | Constraint | Test |
 |---|---|
 | Harness identity projection keeps full, redacted, and hidden views distinct. | `nix flake check .#harness-identity-projection-views` |
-| A parent claims one stable alias from its Codex UUID and prints no other stdout. | `nix flake check .#flow-id` |
-| A first creator never exposes a partial marker to a concurrent claimant. | `nix flake check .#flow-id-publication-race` |
+| A Codex parent claims one stable alias from its UUID and prints no other stdout. | `nix flake check .#flow-id` |
+| A Claude parent claims the first six literal hex characters of its UUIDv4 parent session. | `nix flake check .#flow-id-claude` |
+| A Claude first creator never exposes a partial marker to a concurrent claimant. | `nix flake check .#flow-id-publication-race` |
 | Harness identity projection cannot collapse back to one always-full record. | `nix flake check .#harness-identity-projection-source-constraint` |
 | Fixture-only human terminal endpoints cannot claim production delivery. | `nix flake check .#terminal-fixture-endpoint-not-production-delivery` |
 | `HarnessKind` has exactly four variants and no fifth. | `nix flake check .#harness-kind-includes-all-four-variants` |
