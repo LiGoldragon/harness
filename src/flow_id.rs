@@ -81,24 +81,63 @@ struct Marker {
     harness: HarnessKind,
     identity: String,
     alias: String,
+    claude_uuid_version: Option<ClaudeUuidVersion>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ClaudeUuidVersion {
+    V4,
+    V5,
+}
+
+impl ClaudeUuidVersion {
+    fn marker_value(self) -> &'static str {
+        match self {
+            Self::V4 => "uuid-v4",
+            Self::V5 => "uuid-v5",
+        }
+    }
+
+    fn from_normalized_identity(identity: &str) -> Option<Self> {
+        if identity.len() != 32
+            || !matches!(identity.as_bytes().get(16), Some(b'8' | b'9' | b'a' | b'b'))
+        {
+            return None;
+        }
+        match identity.as_bytes().get(12) {
+            Some(b'4') => Some(Self::V4),
+            Some(b'5') => Some(Self::V5),
+            _ => None,
+        }
+    }
 }
 
 impl Marker {
-    fn new(harness: HarnessKind, identity: &str, alias: &str) -> Self {
+    fn new(
+        harness: HarnessKind,
+        identity: &str,
+        alias: &str,
+        claude_uuid_version: Option<ClaudeUuidVersion>,
+    ) -> Self {
         Self {
             harness,
             identity: identity.into(),
             alias: alias.into(),
+            claude_uuid_version,
         }
     }
 
     fn encode(&self) -> String {
+        let uuid_version = self
+            .claude_uuid_version
+            .map(|version| format!("uuid-version={}\n", version.marker_value()))
+            .unwrap_or_default();
         format!(
             "version={MARKER_VERSION}\nharness={}\nidentity={}\nalias={}\n",
             self.harness.name(),
             self.identity,
             self.alias,
-        )
+        ) + &uuid_version
     }
 
     fn decode(path: &Path, text: &str) -> Result<Self> {
@@ -107,6 +146,7 @@ impl Marker {
         let harness = lines.next();
         let identity = lines.next();
         let alias = lines.next();
+        let uuid_version = lines.next();
         if lines.next().is_some()
             || version != Some("version=1")
             || !identity.is_some_and(|line| line.starts_with("identity="))
@@ -130,14 +170,36 @@ impl Marker {
         if alias.is_empty() || alias.bytes().any(|byte| !byte.is_ascii_hexdigit()) {
             return Err(Error::MalformedMarker(path.into()));
         }
-        Ok(Self::new(harness, &identity, alias))
+        let claude_uuid_version = match (harness, uuid_version) {
+            (HarnessKind::Codex, None) => None,
+            (HarnessKind::Codex, Some(_)) => return Err(Error::MalformedMarker(path.into())),
+            // Deployed Claude markers predate this field and could only have
+            // been minted for v4 roots. Preserve those claims; untyped v5
+            // metadata is not trusted.
+            (HarnessKind::Claude, None) => match ClaudeUuidVersion::from_normalized_identity(&identity) {
+                Some(ClaudeUuidVersion::V4) => Some(ClaudeUuidVersion::V4),
+                _ => return Err(Error::MalformedMarker(path.into())),
+            },
+            (HarnessKind::Claude, Some("uuid-version=uuid-v4")) => Some(ClaudeUuidVersion::V4),
+            (HarnessKind::Claude, Some("uuid-version=uuid-v5")) => Some(ClaudeUuidVersion::V5),
+            (HarnessKind::Claude, Some(_)) => return Err(Error::MalformedMarker(path.into())),
+        };
+        if let Some(uuid_version) = claude_uuid_version
+            && ClaudeUuidVersion::from_normalized_identity(&identity) != Some(uuid_version)
+        {
+            return Err(Error::MalformedMarker(path.into()));
+        }
+        Ok(Self::new(harness, &identity, alias, claude_uuid_version))
     }
 }
 
 pub fn claim(harness: HarnessKind, flows_root: &Path, identity: &str) -> Result<String> {
-    let (identity, candidate_start) = match harness {
-        HarnessKind::Codex => (normalize_uuid(identity)?, CODEX_CANDIDATE_START),
-        HarnessKind::Claude => (normalize_claude_parent_uuid_v4(identity)?, 0),
+    let (identity, candidate_start, claude_uuid_version) = match harness {
+        HarnessKind::Codex => (normalize_uuid(identity)?, CODEX_CANDIDATE_START, None),
+        HarnessKind::Claude => {
+            let (identity, version) = normalize_claude_parent_uuid(identity)?;
+            (identity, 0, Some(version))
+        }
     };
     validate_root(flows_root)?;
 
@@ -146,7 +208,7 @@ pub fn claim(harness: HarnessKind, flows_root: &Path, identity: &str) -> Result<
         match inspect_lane(flows_root, alias)? {
             Lane::Legacy => continue,
             Lane::Missing | Lane::Owned => {
-                match claim_candidate(harness, flows_root, &identity, alias)? {
+                match claim_candidate(harness, flows_root, &identity, alias, claude_uuid_version)? {
                     Candidate::Claimed => return Ok(alias.into()),
                     Candidate::Collision => continue,
                 }
@@ -177,7 +239,7 @@ pub fn normalize_uuid(value: &str) -> Result<String> {
         .collect())
 }
 
-fn normalize_claude_parent_uuid_v4(value: &str) -> Result<String> {
+fn normalize_claude_parent_uuid(value: &str) -> Result<(String, ClaudeUuidVersion)> {
     let canonical_uuid = value.len() == 36
         && value.bytes().enumerate().all(|(index, byte)| {
             if matches!(index, 8 | 13 | 18 | 23) {
@@ -186,18 +248,25 @@ fn normalize_claude_parent_uuid_v4(value: &str) -> Result<String> {
                 byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()
             }
         });
-    let version_is_v4 = value.as_bytes().get(14) == Some(&b'4');
+    let uuid_version = match value.as_bytes().get(14) {
+        Some(b'4') => Some(ClaudeUuidVersion::V4),
+        Some(b'5') => Some(ClaudeUuidVersion::V5),
+        _ => None,
+    };
     let rfc4122_variant = matches!(value.as_bytes().get(19), Some(b'8' | b'9' | b'a' | b'b'));
-    if !canonical_uuid || !version_is_v4 || !rfc4122_variant {
+    if !canonical_uuid || uuid_version.is_none() || !rfc4122_variant {
         return Err(Error::Argument(
-            "Claude parent session must be one canonical UUIDv4".into(),
+            "Claude parent session must be one canonical RFC 4122 UUIDv4 or UUIDv5".into(),
         ));
     }
-    Ok(value
-        .bytes()
-        .filter(|byte| *byte != b'-')
-        .map(char::from)
-        .collect())
+    Ok((
+        value
+            .bytes()
+            .filter(|byte| *byte != b'-')
+            .map(char::from)
+            .collect(),
+        uuid_version.expect("validated"),
+    ))
 }
 
 enum Lane {
@@ -241,9 +310,10 @@ fn claim_candidate(
     root: &Path,
     identity: &str,
     alias: &str,
+    claude_uuid_version: Option<ClaudeUuidVersion>,
 ) -> Result<Candidate> {
     let marker_path = marker_path(root, alias);
-    let expected = Marker::new(harness, identity, alias);
+    let expected = Marker::new(harness, identity, alias, claude_uuid_version);
     let lock_path = claim_lock_path(root, alias);
     let lock_file = open_claim_lock(&lock_path)?;
     lock_file.lock().map_err(|source| Error::Filesystem {

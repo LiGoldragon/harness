@@ -66,9 +66,10 @@ flowchart LR
   and owner-only meta sockets from a single binary startup record;
 - `flow-id`, the parent-only filesystem claim CLI for one shared flow alias:
   Codex claims normalized UUID characters `[23:29]`, while Claude claims the
-  first six literal hexadecimal characters of a canonical UUIDv4 parent
-  session. Both use a stable private lock and complete-or-absent marker
-  publication;
+  first six literal hexadecimal characters of a canonical lowercase UUIDv4 or
+  UUIDv5 parent session with RFC 4122 variant. Claude markers retain that UUID
+  version, while deployed untyped v4 markers stay compatible. Both use a stable
+  private lock and complete-or-absent marker publication;
 - harness identity records;
 - lifecycle state;
 - transcript events;
@@ -325,8 +326,8 @@ tests/                    harness smoke, daemon, CLI, and actor-runtime tests
 |---|---|
 | Harness identity projection keeps full, redacted, and hidden views distinct. | `nix flake check .#harness-identity-projection-views` |
 | A Codex parent claims one stable alias from its UUID and prints no other stdout. | `nix flake check .#flow-id` |
-| A Claude parent claims the first six literal hex characters of its UUIDv4 parent session. | `nix flake check .#flow-id-claude` |
-| Claude rejects noncanonical, non-v4, and invalid-variant parent sessions before claiming a lane. | `nix flake check .#flow-id-claude-validation` |
+| A Claude parent claims the first six literal hex characters of its UUIDv4 or UUIDv5 parent session. | `nix flake check .#flow-id-claude` |
+| Claude rejects noncanonical, unsupported-version, and invalid-variant parent sessions before claiming a lane. | `nix flake check .#flow-id-claude-validation` |
 | Claude fails closed after every eligible literal candidate is occupied. | `nix flake check .#flow-id-claude-exhaustion` |
 | A Claude first creator never exposes a partial marker to a concurrent claimant. | `nix flake check .#flow-id-publication-race` |
 | Harness identity projection cannot collapse back to one always-full record. | `nix flake check .#harness-identity-projection-source-constraint` |

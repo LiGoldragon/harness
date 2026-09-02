@@ -5,15 +5,18 @@ ABSOLUTE_DIRECTORY` after Codex provides `CODEX_SESSION_ID`, or `flow-id
 claude --flows-root ABSOLUTE_DIRECTORY --parent-session UUID` when Claude's
 authoritative parent identity is known. Codex normalizes its UUID and claims
 from `[23:29]` onward. Claude accepts only a canonical lowercase RFC 4122
-UUIDv4 parent session and claims its first six literal hexadecimal characters.
+UUIDv4 or UUIDv5 parent session (with variant nibble `8`, `9`, `a`, or `b`) and claims
+its first six literal hexadecimal characters.
 Both extend the candidate by the following eligible hexadecimal character only
 when a lane collides. It prints only the claimed hex alias. The parent passes
 that alias as `FLOW_ID` and `flows-root/FLOW_ID` as `FLOW_DIRECTORY`; child
 threads never invoke it.
 
-Each alias has a private stable claim lock and a private versioned marker. The
-helper takes the lock before reading marker contents, writes marker metadata to
-a same-directory private temporary file, and publishes only a complete marker.
+Each alias has a private stable claim lock and a private versioned marker. New
+Claude markers retain `uuid-version=uuid-v4` or `uuid-version=uuid-v5`; deployed
+untyped v4 markers remain compatible. The helper takes the lock before reading
+marker contents, writes marker metadata to a same-directory private temporary
+file, and publishes only a complete marker.
 
 Typed harness abstraction for Persona.
 

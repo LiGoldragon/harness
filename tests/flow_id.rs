@@ -11,6 +11,7 @@ use tempfile::TempDir;
 
 const CODEX_SESSION: &str = "01a05e95-1234-5678-9abc-000715d46abc";
 const CLAUDE_SESSION: &str = "a1b2c3d4-e5f6-4a78-9abc-def012345678";
+const CLAUDE_V5_SESSION: &str = "a1b2c3e4-e5f6-5a78-9abc-def012345678";
 const FIRST_ALIAS: &str = "715d46";
 const CLAUDE_FIRST_ALIAS: &str = "a1b2c3";
 
@@ -264,7 +265,7 @@ fn claude_uses_only_the_explicit_parent_session() {
 }
 
 #[test]
-fn claude_uses_the_first_six_literal_characters_of_its_canonical_v4_parent_session() {
+fn claude_uses_the_first_six_literal_characters_of_its_canonical_v4_or_v5_parent_session() {
     let root = flows_root();
     let output = claude(root.path(), CLAUDE_SESSION);
     assert_eq!(success_alias(output), "a1b2c3\n");
@@ -272,11 +273,11 @@ fn claude_uses_the_first_six_literal_characters_of_its_canonical_v4_parent_sessi
 }
 
 #[test]
-fn claude_rejects_noncanonical_and_non_v4_parent_sessions_without_claiming_a_lane() {
+fn claude_rejects_noncanonical_unsupported_version_and_invalid_variant_parent_sessions_without_claiming_a_lane() {
     let root = flows_root();
     for parent_session in [
         "a1b2c3d4-e5f6-1a78-9abc-def012345678",
-        "a1b2c3d4-e5f6-5a78-9abc-def012345678",
+        "a1b2c3d4-e5f6-3a78-9abc-def012345678",
         "a1b2c3d4-e5f6-4a78-7abc-def012345678",
         "a1b2c3d4-e5f6-4a78-cabc-def012345678",
         "A1B2C3D4-E5F6-4A78-9ABC-DEF012345678",
@@ -291,6 +292,119 @@ fn claude_rejects_noncanonical_and_non_v4_parent_sessions_without_claiming_a_lan
         .expect("empty root")
         .next()
         .is_none());
+}
+
+#[test]
+fn claude_v5_claims_are_idempotent_private_and_separate_from_same_prefix_v4_claims() {
+    let root = flows_root();
+    assert_eq!(
+        success_alias(claude(root.path(), CLAUDE_SESSION)),
+        "a1b2c3\n"
+    );
+    assert_eq!(
+        success_alias(claude(root.path(), CLAUDE_V5_SESSION)),
+        "a1b2c3e\n",
+        "a v5 root collides with, rather than adopts, the v4 first-six lane"
+    );
+    assert_eq!(
+        success_alias(claude(root.path(), CLAUDE_V5_SESSION)),
+        "a1b2c3e\n",
+        "the v5 root keeps its extended claim"
+    );
+    assert_eq!(
+        fs::read_to_string(marker(root.path(), CLAUDE_FIRST_ALIAS)).expect("v4 marker"),
+        "version=1\nharness=claude\nidentity=a1b2c3d4e5f64a789abcdef012345678\nalias=a1b2c3\nuuid-version=uuid-v4\n"
+    );
+    assert_eq!(
+        fs::read_to_string(marker(root.path(), "a1b2c3e")).expect("v5 marker"),
+        "version=1\nharness=claude\nidentity=a1b2c3e4e5f65a789abcdef012345678\nalias=a1b2c3e\nuuid-version=uuid-v5\n"
+    );
+    for alias in [CLAUDE_FIRST_ALIAS, "a1b2c3e"] {
+        assert_eq!(
+            fs::metadata(root.path().join(alias))
+                .expect("Claude lane")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700,
+        );
+        assert_eq!(
+            fs::metadata(claim_lock(root.path(), alias))
+                .expect("Claude claim lock")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600,
+        );
+    }
+}
+
+#[test]
+fn deployed_untyped_v4_claude_marker_remains_idempotent_but_untyped_v5_fails_closed() {
+    let root = flows_root();
+    fs::create_dir(root.path().join(CLAUDE_FIRST_ALIAS)).expect("legacy v4 lane");
+    fs::set_permissions(
+        root.path().join(CLAUDE_FIRST_ALIAS),
+        fs::Permissions::from_mode(0o700),
+    )
+    .expect("private v4 lane");
+    fs::write(
+        marker(root.path(), CLAUDE_FIRST_ALIAS),
+        "version=1\nharness=claude\nidentity=a1b2c3d4e5f64a789abcdef012345678\nalias=a1b2c3\n",
+    )
+    .expect("deployed v4 marker");
+    fs::set_permissions(
+        marker(root.path(), CLAUDE_FIRST_ALIAS),
+        fs::Permissions::from_mode(0o600),
+    )
+    .expect("private deployed marker");
+    fs::write(claim_lock(root.path(), CLAUDE_FIRST_ALIAS), "").expect("legacy v4 lock");
+    fs::set_permissions(
+        claim_lock(root.path(), CLAUDE_FIRST_ALIAS),
+        fs::Permissions::from_mode(0o600),
+    )
+    .expect("private deployed lock");
+
+    assert_eq!(
+        success_alias(claude(root.path(), CLAUDE_SESSION)),
+        "a1b2c3\n",
+        "a deployed v4 marker remains its original stable claim"
+    );
+    assert!(
+        !fs::read_to_string(marker(root.path(), CLAUDE_FIRST_ALIAS))
+            .expect("deployed marker")
+            .contains("uuid-version="),
+        "idempotence does not rewrite private deployed metadata"
+    );
+
+    let untyped_v5 = "b1c2d3e4-e5f6-5a78-9abc-def012345678";
+    let untyped_v5_alias = "b1c2d3";
+    fs::create_dir(root.path().join(untyped_v5_alias)).expect("untyped v5 lane");
+    fs::set_permissions(
+        root.path().join(untyped_v5_alias),
+        fs::Permissions::from_mode(0o700),
+    )
+    .expect("private untyped v5 lane");
+    fs::write(
+        marker(root.path(), untyped_v5_alias),
+        "version=1\nharness=claude\nidentity=b1c2d3e4e5f65a789abcdef012345678\nalias=b1c2d3\n",
+    )
+    .expect("untyped v5 marker");
+    fs::set_permissions(
+        marker(root.path(), untyped_v5_alias),
+        fs::Permissions::from_mode(0o600),
+    )
+    .expect("private untyped v5 marker");
+    fs::write(claim_lock(root.path(), untyped_v5_alias), "").expect("untyped v5 lock");
+    fs::set_permissions(
+        claim_lock(root.path(), untyped_v5_alias),
+        fs::Permissions::from_mode(0o600),
+    )
+    .expect("private untyped v5 lock");
+    assert!(
+        !claude(root.path(), untyped_v5).status.success(),
+        "untyped v5 marker must not be trusted as old v4 metadata"
+    );
 }
 
 #[test]
@@ -324,7 +438,7 @@ fn claude_claim_is_idempotent_and_keeps_private_marker_and_lock_permissions() {
     );
     assert_eq!(
         fs::read_to_string(marker(root.path(), CLAUDE_FIRST_ALIAS)).expect("Claude marker"),
-        "version=1\nharness=claude\nidentity=a1b2c3d4e5f64a789abcdef012345678\nalias=a1b2c3\n"
+        "version=1\nharness=claude\nidentity=a1b2c3d4e5f64a789abcdef012345678\nalias=a1b2c3\nuuid-version=uuid-v4\n"
     );
     assert_eq!(
         fs::metadata(claim_lock(root.path(), CLAUDE_FIRST_ALIAS))
