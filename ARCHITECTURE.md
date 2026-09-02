@@ -326,6 +326,8 @@ tests/                    harness smoke, daemon, CLI, and actor-runtime tests
 | Harness identity projection keeps full, redacted, and hidden views distinct. | `nix flake check .#harness-identity-projection-views` |
 | A Codex parent claims one stable alias from its UUID and prints no other stdout. | `nix flake check .#flow-id` |
 | A Claude parent claims the first six literal hex characters of its UUIDv4 parent session. | `nix flake check .#flow-id-claude` |
+| Claude rejects noncanonical, non-v4, and invalid-variant parent sessions before claiming a lane. | `nix flake check .#flow-id-claude-validation` |
+| Claude fails closed after every eligible literal candidate is occupied. | `nix flake check .#flow-id-claude-exhaustion` |
 | A Claude first creator never exposes a partial marker to a concurrent claimant. | `nix flake check .#flow-id-publication-race` |
 | Harness identity projection cannot collapse back to one always-full record. | `nix flake check .#harness-identity-projection-source-constraint` |
 | Fixture-only human terminal endpoints cannot claim production delivery. | `nix flake check .#terminal-fixture-endpoint-not-production-delivery` |

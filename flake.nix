@@ -148,6 +148,8 @@
           meta-harness-cli-reaches-policy-socket = context.cargoTest "component_cli" "meta_harness_cli_reaches_policy_socket_and_prints_typed_reply";
           flow-id = context.cargoTest "flow_id" "codex_extracts_the_normalized_hex_23_to_29_candidate_and_prints_only_the_alias";
           flow-id-claude = context.cargoTest "flow_id" "claude_uses_the_first_six_literal_characters_of_its_canonical_v4_parent_session";
+          flow-id-claude-validation = context.cargoTest "flow_id" "claude_rejects_noncanonical_and_non_v4_parent_sessions_without_claiming_a_lane";
+          flow-id-claude-exhaustion = context.cargoTest "flow_id" "claude_fails_closed_when_every_eligible_literal_hex_candidate_is_occupied";
           flow-id-publication-race = context.cargoLibTest "flow_id::tests::claude_first_creator_publishes_complete_marker_only_after_the_stable_claim_lock";
         }
       );

@@ -277,6 +277,8 @@ fn claude_rejects_noncanonical_and_non_v4_parent_sessions_without_claiming_a_lan
     for parent_session in [
         "a1b2c3d4-e5f6-1a78-9abc-def012345678",
         "a1b2c3d4-e5f6-5a78-9abc-def012345678",
+        "a1b2c3d4-e5f6-4a78-7abc-def012345678",
+        "a1b2c3d4-e5f6-4a78-cabc-def012345678",
         "A1B2C3D4-E5F6-4A78-9ABC-DEF012345678",
         "a1b2c3d4e5f64a789abcdef012345678",
     ] {
@@ -289,6 +291,24 @@ fn claude_rejects_noncanonical_and_non_v4_parent_sessions_without_claiming_a_lan
         .expect("empty root")
         .next()
         .is_none());
+}
+
+#[test]
+fn claude_fails_closed_when_every_eligible_literal_hex_candidate_is_occupied() {
+    let root = flows_root();
+    let identity = "a1b2c3d4e5f64a789abcdef012345678";
+    for end in 6..=identity.len() {
+        fs::create_dir(root.path().join(&identity[..end])).expect("occupy Claude candidate");
+    }
+    let output = claude(root.path(), CLAUDE_SESSION);
+    assert!(!output.status.success(), "exhausted Claude claim succeeded");
+    assert_eq!(
+        fs::read_dir(root.path())
+            .expect("occupied candidates")
+            .count(),
+        identity.len() - 5,
+        "a rejected exhaustion claim must not overwrite or add a lane"
+    );
 }
 
 #[test]
