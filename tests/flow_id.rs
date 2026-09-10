@@ -1,6 +1,6 @@
 use std::{
     fs,
-    os::unix::fs::{symlink, PermissionsExt},
+    os::unix::fs::{PermissionsExt, symlink},
     path::{Path, PathBuf},
     process::Command,
     sync::Barrier,
@@ -194,10 +194,12 @@ fn missing_invalid_and_ambiguous_identities_are_rejected_without_a_lane() {
         .output()
         .expect("run ambiguous parent identity");
     assert!(!ambiguous.status.success());
-    assert!(fs::read_dir(root.path())
-        .expect("empty root")
-        .next()
-        .is_none());
+    assert!(
+        fs::read_dir(root.path())
+            .expect("empty root")
+            .next()
+            .is_none()
+    );
 }
 
 #[test]
@@ -242,9 +244,11 @@ fn concurrent_same_and_different_sessions_claim_without_overwriting() {
         if marker_path.exists() {
             let metadata = fs::metadata(&marker_path).expect("complete concurrent marker");
             assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
-            assert!(fs::read_to_string(marker_path)
-                .expect("complete concurrent marker content")
-                .starts_with("version=1\n"),);
+            assert!(
+                fs::read_to_string(marker_path)
+                    .expect("complete concurrent marker content")
+                    .starts_with("version=1\n"),
+            );
         }
     }
 }
@@ -273,7 +277,8 @@ fn claude_uses_the_first_six_literal_characters_of_its_canonical_v4_or_v5_parent
 }
 
 #[test]
-fn claude_rejects_noncanonical_unsupported_version_and_invalid_variant_parent_sessions_without_claiming_a_lane() {
+fn claude_rejects_noncanonical_unsupported_version_and_invalid_variant_parent_sessions_without_claiming_a_lane()
+ {
     let root = flows_root();
     for parent_session in [
         "a1b2c3d4-e5f6-1a78-9abc-def012345678",
@@ -288,10 +293,12 @@ fn claude_rejects_noncanonical_unsupported_version_and_invalid_variant_parent_se
             "invalid Claude parent session unexpectedly succeeded: {parent_session}"
         );
     }
-    assert!(fs::read_dir(root.path())
-        .expect("empty root")
-        .next()
-        .is_none());
+    assert!(
+        fs::read_dir(root.path())
+            .expect("empty root")
+            .next()
+            .is_none()
+    );
 }
 
 #[test]
@@ -479,12 +486,16 @@ fn claude_does_not_adopt_a_codex_marker_with_the_same_alias() {
         success_alias(claude(root.path(), CLAUDE_SESSION)),
         "a1b2c3d\n"
     );
-    assert!(fs::read_to_string(marker(root.path(), CLAUDE_FIRST_ALIAS))
-        .expect("Codex marker")
-        .contains("harness=codex\n"));
-    assert!(fs::read_to_string(marker(root.path(), "a1b2c3d"))
-        .expect("Claude marker")
-        .contains("harness=claude\n"));
+    assert!(
+        fs::read_to_string(marker(root.path(), CLAUDE_FIRST_ALIAS))
+            .expect("Codex marker")
+            .contains("harness=codex\n")
+    );
+    assert!(
+        fs::read_to_string(marker(root.path(), "a1b2c3d"))
+            .expect("Claude marker")
+            .contains("harness=claude\n")
+    );
 }
 
 #[test]
@@ -497,8 +508,10 @@ fn child_is_not_a_helper_mode_and_cannot_create_a_child_lane() {
         .output()
         .expect("run unsupported helper mode");
     assert!(!output.status.success());
-    assert!(fs::read_dir(root.path())
-        .expect("empty root")
-        .next()
-        .is_none());
+    assert!(
+        fs::read_dir(root.path())
+            .expect("empty root")
+            .next()
+            .is_none()
+    );
 }

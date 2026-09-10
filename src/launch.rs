@@ -40,6 +40,7 @@ impl HarnessLaunchCommand {
     /// posture; its effectiveness on the installed build is unverified.
     const CLAUDE_COOPERATIVE_CHANNEL_FLAG: &'static str = "--channels";
 
+    #[allow(clippy::result_large_err)]
     fn for_request(request: &SessionLaunchRequest) -> Result<Self, SessionLaunchRefused> {
         let prompt = request.initial_prompt.as_str().to_string();
         match request.harness_kind {
@@ -59,8 +60,7 @@ impl HarnessLaunchCommand {
             HarnessKind::Fixture => Err(SessionLaunchRefused {
                 request: request.clone(),
                 reason: SessionLaunchRefusalReason::HarnessKindUnsupported,
-                detail: "fixture launches spawn directly, not through a terminal cell"
-                    .to_string(),
+                detail: "fixture launches spawn directly, not through a terminal cell".to_string(),
             }),
         }
     }
@@ -132,10 +132,10 @@ impl TerminalCellRuntimeRoot {
     fn child_process_id(&self, session_directory: &Path) -> Option<u32> {
         let pid_path = session_directory.join(Self::CHILD_PID_FILE);
         for _ in 0..Self::CHILD_PID_ATTEMPTS {
-            if let Ok(text) = std::fs::read_to_string(&pid_path) {
-                if let Ok(pid) = text.trim().parse::<u32>() {
-                    return Some(pid);
-                }
+            if let Ok(text) = std::fs::read_to_string(&pid_path)
+                && let Ok(pid) = text.trim().parse::<u32>()
+            {
+                return Some(pid);
             }
             std::thread::sleep(Self::CHILD_PID_WAIT);
         }
@@ -199,8 +199,7 @@ impl SessionLauncher {
             return MetaHarnessReply::SessionLaunchRefused(SessionLaunchRefused {
                 request,
                 reason: SessionLaunchRefusalReason::ContinuationUnsupported,
-                detail: "session continuation at launch is not built yet; launch fresh"
-                    .to_string(),
+                detail: "session continuation at launch is not built yet; launch fresh".to_string(),
             });
         }
         match request.harness_kind {
@@ -341,11 +340,9 @@ mod tests {
 
     #[test]
     fn claude_spawn_row_carries_cooperative_channel_flag_before_prompt() {
-        let command = HarnessLaunchCommand::for_request(&request(
-            HarnessKind::Claude,
-            "You are agent xk3f.",
-        ))
-        .expect("claude spawn row");
+        let command =
+            HarnessLaunchCommand::for_request(&request(HarnessKind::Claude, "You are agent xk3f."))
+                .expect("claude spawn row");
         assert_eq!(command.program, "claude");
         assert_eq!(
             command.arguments,

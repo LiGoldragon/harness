@@ -2,11 +2,9 @@ use std::io::{BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 
-use signal_frame::{ExchangeIdentifier, ExchangeLane, LaneSequence, Reply, SessionEpoch, SubReply};
 use signal_terminal::{
-    Frame as TerminalFrame, FrameBody as TerminalFrameBody, Input as TerminalInputRoot, InputBytes,
-    Output as TerminalOutput, Terminal, TerminalCapture, TerminalInput, TerminalInputBytes,
-    TerminalName,
+    ByteViewable, Query as TerminalInputRoot, Response as TerminalOutput, Restorable, Signal,
+    Signalizable, TerminalCaptureRequest, TerminalInputRequest, TerminalName,
 };
 
 use crate::{HarnessIdentifier, Result};
@@ -19,7 +17,7 @@ pub struct HarnessTerminalBinding {
 
 impl HarnessTerminalBinding {
     pub fn for_harness(harness: HarnessIdentifier) -> Self {
-        let terminal = TerminalName::new(harness.as_str().to_owned());
+        let terminal = harness.as_str().to_owned();
         Self { harness, terminal }
     }
 
@@ -36,18 +34,16 @@ impl HarnessTerminalBinding {
     }
 
     pub fn input_request(&self, bytes: Vec<u8>) -> TerminalInputRoot {
-        TerminalInputRoot::TerminalInput(TerminalInput {
-            terminal: Terminal::new(self.terminal.clone()),
-            input_bytes: InputBytes::new(TerminalInputBytes::new(
-                bytes.into_iter().map(u64::from).collect(),
-            )),
+        TerminalInputRoot::TerminalInput(TerminalInputRequest {
+            terminal: self.terminal.clone(),
+            input_bytes: bytes.into_iter().map(i64::from).collect(),
         })
     }
 
     pub fn capture_request(&self) -> TerminalInputRoot {
-        TerminalInputRoot::TerminalCapture(TerminalCapture::new(Terminal::new(
-            self.terminal.clone(),
-        )))
+        TerminalInputRoot::TerminalCapture(TerminalCaptureRequest {
+            terminal: self.terminal.clone(),
+        })
     }
 }
 
@@ -73,7 +69,7 @@ pub enum TerminalDeliveryPath {
     TerminalTransport,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TerminalDeliveryReceipt {
     delivered: bool,
     path: TerminalDeliveryPath,
@@ -180,48 +176,27 @@ impl TerminalSignalTransport {
         }
     }
 
-    fn exchange(&self, request: TerminalInputRoot, sequence: u64) -> Result<TerminalOutput> {
+    fn exchange(&self, request: TerminalInputRoot, _sequence: u64) -> Result<TerminalOutput> {
         let mut stream = UnixStream::connect(&self.socket_path)?;
-        let exchange = ExchangeIdentifier::new(
-            SessionEpoch::new(0),
-            ExchangeLane::Connector,
-            LaneSequence::new(sequence.saturating_add(1)),
-        );
-        let frame = request.into_frame(exchange);
-        stream.write_all(&frame.encode_length_prefixed()?)?;
+        let bytes = request
+            .signalize()
+            .map_err(|error| crate::Error::UnexpectedSignalFrame {
+                got: error.to_string(),
+            })?
+            .bytes()
+            .to_vec();
+        stream.write_all(&(bytes.len() as u32).to_be_bytes())?;
+        stream.write_all(&bytes)?;
         stream.flush()?;
-
         let mut reader = BufReader::new(stream);
-        match self.read_reply_frame(&mut reader)?.into_body() {
-            TerminalFrameBody::Reply { reply, .. } => Self::terminal_reply(reply),
-            other => Err(crate::Error::UnexpectedSignalFrame {
-                got: format!("{other:?}"),
-            }),
-        }
-    }
-
-    fn read_reply_frame(&self, reader: &mut impl Read) -> Result<TerminalFrame> {
-        let mut prefix = [0_u8; 4];
+        let mut prefix = [0; 4];
         reader.read_exact(&mut prefix)?;
-        let length = u32::from_be_bytes(prefix) as usize;
-        let mut bytes = Vec::with_capacity(4 + length);
-        bytes.extend_from_slice(&prefix);
-        bytes.resize(4 + length, 0);
-        reader.read_exact(&mut bytes[4..])?;
-        Ok(TerminalFrame::decode_length_prefixed(&bytes)?)
-    }
-
-    fn terminal_reply(reply: Reply<TerminalOutput>) -> Result<TerminalOutput> {
-        match reply {
-            Reply::Accepted { per_operation, .. } => match per_operation.into_head() {
-                SubReply::Ok(payload) => Ok(payload),
-                other => Err(crate::Error::UnexpectedSignalFrame {
-                    got: format!("{other:?}"),
-                }),
-            },
-            Reply::Rejected { reason } => Err(crate::Error::UnexpectedSignalFrame {
-                got: format!("{reason:?}"),
-            }),
-        }
+        let mut bytes = vec![0; u32::from_be_bytes(prefix) as usize];
+        reader.read_exact(&mut bytes)?;
+        Signal::<TerminalOutput>::from(bytes)
+            .restore()
+            .map_err(|error| crate::Error::UnexpectedSignalFrame {
+                got: error.to_string(),
+            })
     }
 }

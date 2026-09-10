@@ -216,6 +216,7 @@ impl TranscriptSubscriptionSink {
         });
     }
 
+    #[allow(clippy::result_large_err)]
     fn try_push(&self, event: TranscriptDeliveryEvent) -> Result<(), TranscriptDeliveryEvent> {
         match &self.target {
             TranscriptSubscriptionSinkTarget::Memory(inner) => {

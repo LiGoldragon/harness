@@ -4,6 +4,7 @@
 //!
 //! Each test spawns the real producer-plane actors (`TranscriptSubscriptionManager`
 //! + `TranscriptDeltaPublisher`) and subscribes through a channel-backed sink.
+//!
 //! The subscriber's only wait is `UnboundedReceiver::recv().await` — the task
 //! parks until the producer pushes and is woken by the push, never a `sleep` or
 //! interval tick. The push-quiescence assertion (`try_recv` is `Empty` before

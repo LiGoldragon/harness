@@ -84,10 +84,8 @@ fn unconfigured_fixture_launch_is_refused_typed() {
 
 #[test]
 fn fixture_launch_delivers_identity_bearing_prompt_as_final_spawn_argument() {
-    let capture_directory = std::env::temp_dir().join(format!(
-        "harness-launch-witness-{}",
-        std::process::id()
-    ));
+    let capture_directory =
+        std::env::temp_dir().join(format!("harness-launch-witness-{}", std::process::id()));
     std::fs::create_dir_all(&capture_directory).expect("create capture directory");
     let capture_file = capture_directory.join("prompt.txt");
     let launcher = SessionLauncher::with_fixture_command(FixtureLaunchCommand::new(
@@ -114,10 +112,10 @@ fn fixture_launch_delivers_identity_bearing_prompt_as_final_spawn_argument() {
 
     let deadline = Instant::now() + Duration::from_secs(5);
     let captured = loop {
-        if let Ok(text) = std::fs::read_to_string(&capture_file) {
-            if !text.is_empty() {
-                break text;
-            }
+        if let Ok(text) = std::fs::read_to_string(&capture_file)
+            && !text.is_empty()
+        {
+            break text;
         }
         assert!(
             Instant::now() < deadline,

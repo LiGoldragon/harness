@@ -218,8 +218,8 @@ fn terminal_delivery_cannot_use_retired_transport_or_sleep_verification() {
     }
 
     assert!(!source.contains("persona_terminal::contract::TerminalTransportBinding"));
-    assert!(source.contains("request.into_frame(exchange)"));
-    assert!(source.contains("TerminalFrameBody::Reply"));
+    assert!(source.contains(".signalize()"));
+    assert!(source.contains("Signal::<TerminalOutput>::from(bytes)"));
     assert!(source.contains("TerminalOutput::TerminalInputAccepted"));
 }
 

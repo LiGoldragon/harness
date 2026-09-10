@@ -176,20 +176,22 @@ impl Marker {
             // Deployed Claude markers predate this field and could only have
             // been minted for v4 roots. Preserve those claims; untyped v5
             // metadata is not trusted.
-            (HarnessKind::Claude, None) => match ClaudeUuidVersion::from_normalized_identity(&identity) {
-                Some(ClaudeUuidVersion::V4) => Some(ClaudeUuidVersion::V4),
-                _ => return Err(Error::MalformedMarker(path.into())),
-            },
+            (HarnessKind::Claude, None) => {
+                match ClaudeUuidVersion::from_normalized_identity(identity) {
+                    Some(ClaudeUuidVersion::V4) => Some(ClaudeUuidVersion::V4),
+                    _ => return Err(Error::MalformedMarker(path.into())),
+                }
+            }
             (HarnessKind::Claude, Some("uuid-version=uuid-v4")) => Some(ClaudeUuidVersion::V4),
             (HarnessKind::Claude, Some("uuid-version=uuid-v5")) => Some(ClaudeUuidVersion::V5),
             (HarnessKind::Claude, Some(_)) => return Err(Error::MalformedMarker(path.into())),
         };
         if let Some(uuid_version) = claude_uuid_version
-            && ClaudeUuidVersion::from_normalized_identity(&identity) != Some(uuid_version)
+            && ClaudeUuidVersion::from_normalized_identity(identity) != Some(uuid_version)
         {
             return Err(Error::MalformedMarker(path.into()));
         }
-        Ok(Self::new(harness, &identity, alias, claude_uuid_version))
+        Ok(Self::new(harness, identity, alias, claude_uuid_version))
     }
 }
 
@@ -583,8 +585,8 @@ fn validate_lane(path: &Path, metadata: &fs::Metadata) -> Result<()> {
 #[cfg(test)]
 mod test_hook {
     use std::sync::{
-        mpsc::{Receiver, SyncSender},
         Mutex, OnceLock,
+        mpsc::{Receiver, SyncSender},
     };
 
     struct ClaimLockHook {
@@ -616,7 +618,7 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use super::{claim, marker_path, test_hook, HarnessKind, Marker};
+    use super::{HarnessKind, Marker, claim, marker_path, test_hook};
 
     #[test]
     fn claude_first_creator_publishes_complete_marker_only_after_the_stable_claim_lock() {

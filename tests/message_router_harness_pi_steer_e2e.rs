@@ -83,7 +83,9 @@ fn message_cli_send_reaches_live_pi_as_a_steer_through_router_and_harness() {
 
     let output = Command::new(test.binaries().message_cli())
         .env("MESSAGE_SOCKET", test.message_socket(SENDER))
-        .arg(format!("(Send {RECIPIENT} [{MESSAGE_BODY}] (Named {THREAD_NAME}))"))
+        .arg(format!(
+            "(Send {RECIPIENT} [{MESSAGE_BODY}] (Named {THREAD_NAME}))"
+        ))
         .output()
         .expect("run sender message CLI");
     assert!(
@@ -113,7 +115,10 @@ fn message_cli_send_reaches_live_pi_as_a_steer_through_router_and_harness() {
     );
     // The live model surfaces the queued steer in a `queue_update` event as it
     // ingests the harness-authored command on its next natural turn.
-    let queued = test.wait_for_pi_log_contains(&test.pi_outbound_log(), &["\"type\":\"queue_update\"", MESSAGE_BODY]);
+    let queued = test.wait_for_pi_log_contains(
+        &test.pi_outbound_log(),
+        &["\"type\":\"queue_update\"", MESSAGE_BODY],
+    );
 
     eprintln!("=== pi inbound (harness -> live pi) ===\n{inbound}");
     eprintln!("=== pi outbound (live pi -> harness) ===\n{outbound}");

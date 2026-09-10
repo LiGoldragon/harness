@@ -58,7 +58,7 @@ rkyv                    = { version = "0.8", default-features = false, features 
 signal-frame           = { git = "https://github.com/LiGoldragon/signal-frame.git", branch = "main" }
 signal-harness         = { git = "https://github.com/LiGoldragon/signal-harness.git", branch = "main" }
 signal-persona         = { git = "https://github.com/LiGoldragon/signal-persona.git", branch = "main" }
-signal-terminal        = { git = "https://github.com/LiGoldragon/signal-terminal.git", branch = "main" }
+signal-terminal        = { git = "https://github.com/LiGoldragon/signal-terminal.git", rev = "ddbd3237a57e3ca19b5f6208a93770c5eee73aa3" }
 serde_json              = "1"
 thiserror               = "2"
 tokio                   = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time"] }

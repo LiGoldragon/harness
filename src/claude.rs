@@ -366,33 +366,28 @@ impl ClaudeArtifactEventWatcher {
 
     pub fn wait_for_next_snapshot(&mut self, timeout: Duration) -> Result<ClaudeArtifactWake> {
         let deadline = Instant::now() + timeout;
-        loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Err(Error::ClaudeObservationTimeout {
-                    current_working_directory: self.observer.current_working_directory.clone(),
-                });
+
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(Error::ClaudeObservationTimeout {
+                current_working_directory: self.observer.current_working_directory.clone(),
+            });
+        }
+        match self.event_receiver.recv_timeout(remaining) {
+            Ok(Ok(event)) => {
+                self.refresh_watched_roots()?;
+                Ok(ClaudeArtifactWake::FileEvent {
+                    snapshot: self.observer.snapshot()?,
+                    event_paths: event.paths,
+                })
             }
-            match self.event_receiver.recv_timeout(remaining) {
-                Ok(Ok(event)) => {
-                    self.refresh_watched_roots()?;
-                    return Ok(ClaudeArtifactWake::FileEvent {
-                        snapshot: self.observer.snapshot()?,
-                        event_paths: event.paths,
-                    });
-                }
-                Ok(Err(error)) => return Err(ClaudeNotifyError::from(error).into_error()),
-                Err(RecvTimeoutError::Timeout) => {
-                    return Err(Error::ClaudeObservationTimeout {
-                        current_working_directory: self.observer.current_working_directory.clone(),
-                    });
-                }
-                Err(RecvTimeoutError::Disconnected) => {
-                    return Err(Error::ClaudeArtifactWatcher {
-                        message: "file event channel disconnected".to_string(),
-                    });
-                }
-            }
+            Ok(Err(error)) => Err(ClaudeNotifyError::from(error).into_error()),
+            Err(RecvTimeoutError::Timeout) => Err(Error::ClaudeObservationTimeout {
+                current_working_directory: self.observer.current_working_directory.clone(),
+            }),
+            Err(RecvTimeoutError::Disconnected) => Err(Error::ClaudeArtifactWatcher {
+                message: "file event channel disconnected".to_string(),
+            }),
         }
     }
 
@@ -1414,18 +1409,17 @@ impl<'a> JsonLookup<'a> {
     ) {
         match value {
             Value::Object(map) => {
-                if map.get("type").and_then(Value::as_str) == Some("tool_use") {
-                    if let Some(name) = map.get("name").and_then(Value::as_str) {
-                        let identifier =
-                            map.get("id").and_then(Value::as_str).map(ToOwned::to_owned);
-                        let input = map.get("input").cloned().unwrap_or(Value::Null);
-                        calls.push(ClaudeToolCall::new(
-                            record,
-                            identifier,
-                            name.to_string(),
-                            input,
-                        ));
-                    }
+                if map.get("type").and_then(Value::as_str) == Some("tool_use")
+                    && let Some(name) = map.get("name").and_then(Value::as_str)
+                {
+                    let identifier = map.get("id").and_then(Value::as_str).map(ToOwned::to_owned);
+                    let input = map.get("input").cloned().unwrap_or(Value::Null);
+                    calls.push(ClaudeToolCall::new(
+                        record,
+                        identifier,
+                        name.to_string(),
+                        input,
+                    ));
                 }
                 for child in map.values() {
                     self.collect_tool_calls_from_value(record, child, calls);

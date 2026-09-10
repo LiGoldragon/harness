@@ -51,8 +51,8 @@ use signal_persona::{
     UnixUserIdentifier,
 };
 use signal_terminal::{
-    Frame as TerminalFrame, FrameBody as TerminalFrameBody, Generation, Input as TerminalInputRoot,
-    Output as TerminalOutput, TerminalGeneration, TerminalInputAccepted,
+    ByteViewable, Query as TerminalInputRoot, Response as TerminalOutput, Restorable, Signal,
+    Signalizable, TerminalInputAcceptedReply,
 };
 use triad_runtime::{FrameBody as LengthPrefixedFrameBody, LengthPrefixedCodec};
 
@@ -134,22 +134,19 @@ impl TerminalAcceptanceSocket {
             let (mut stream, _) = listener.accept().expect("terminal socket accepts input");
             let received_request =
                 read_terminal_request(&mut stream).expect("terminal socket reads Signal input");
-            match received_request.request {
+            match received_request {
                 TerminalInputRoot::TerminalInput(input) => {
                     let bytes = input
                         .input_bytes
-                        .payload()
-                        .payload()
                         .iter()
                         .map(|byte| *byte as u8)
                         .collect::<Vec<u8>>();
                     sender.send(bytes).expect("terminal socket reports bytes");
                     write_terminal_reply(
                         &mut stream,
-                        received_request.exchange,
-                        TerminalOutput::TerminalInputAccepted(TerminalInputAccepted {
+                        TerminalOutput::TerminalInputAccepted(TerminalInputAcceptedReply {
                             terminal: input.terminal,
-                            generation: Generation::new(TerminalGeneration::new(1)),
+                            generation: 1,
                         }),
                     )
                     .expect("terminal socket writes Signal acceptance");
@@ -180,34 +177,18 @@ impl Drop for TerminalAcceptanceSocket {
     }
 }
 
-struct ReceivedTerminalRequest {
-    exchange: ExchangeIdentifier,
-    request: TerminalInputRoot,
+fn read_terminal_request(stream: &mut UnixStream) -> Option<TerminalInputRoot> {
+    let bytes = read_length_prefixed_frame(stream)?;
+    Signal::<TerminalInputRoot>::from(bytes).restore().ok()
 }
 
-fn read_terminal_request(stream: &mut UnixStream) -> Option<ReceivedTerminalRequest> {
-    let frame = read_length_prefixed_frame(stream)?;
-    match TerminalFrame::decode_length_prefixed(&frame)
-        .ok()?
-        .into_body()
-    {
-        TerminalFrameBody::Request { exchange, request } => {
-            let (request, _tail) = request.payloads.into_head_and_tail();
-            Some(ReceivedTerminalRequest { exchange, request })
-        }
-        _ => None,
-    }
-}
-
-fn write_terminal_reply(
-    stream: &mut UnixStream,
-    exchange: ExchangeIdentifier,
-    output: TerminalOutput,
-) -> std::io::Result<()> {
-    let frame = output.into_reply_frame(exchange);
-    let bytes = frame
-        .encode_length_prefixed()
-        .expect("terminal reply frame encodes");
+fn write_terminal_reply(stream: &mut UnixStream, output: TerminalOutput) -> std::io::Result<()> {
+    let bytes = output
+        .signalize()
+        .map_err(|error| std::io::Error::other(error.to_string()))?
+        .bytes()
+        .to_vec();
+    stream.write_all(&(bytes.len() as u32).to_be_bytes())?;
     stream.write_all(&bytes)?;
     stream.flush()
 }
@@ -770,7 +751,7 @@ async fn harness_daemon_allows_nested_watchers_for_same_harness_without_cross_cl
 
     let first_delivery = read_working_stream_frame_async(&mut client_stream).await;
     let second_delivery = read_working_stream_frame_async(&mut client_stream).await;
-    let delivered_tokens = vec![first_delivery.token, second_delivery.token];
+    let delivered_tokens = [first_delivery.token, second_delivery.token];
     assert!(delivered_tokens.contains(&SubscriptionTokenInner::new(
         first_token.subscription.into_u64()
     )));
