@@ -102,17 +102,18 @@ dependencies = [
 
 [[package]]
 name = "datom-codec"
-version = "0.25.4"
-source = "git+https://github.com/LiGoldragon/datom-codec?rev=35d26d822870356af9b04cacfec40d85600b541d#35d26d822870356af9b04cacfec40d85600b541d"
+version = "0.31.0"
+source = "git+https://github.com/LiGoldragon/datom-codec?rev=09e2a9d52bf7f2f11e51d15cb6c3177f72c6c927#09e2a9d52bf7f2f11e51d15cb6c3177f72c6c927"
 dependencies = [
  "datom-codec-derive",
  "protos",
+ "rkyv",
 ]
 
 [[package]]
 name = "datom-codec-derive"
-version = "0.25.4"
-source = "git+https://github.com/LiGoldragon/datom-codec?rev=35d26d822870356af9b04cacfec40d85600b541d#35d26d822870356af9b04cacfec40d85600b541d"
+version = "0.31.0"
+source = "git+https://github.com/LiGoldragon/datom-codec?rev=09e2a9d52bf7f2f11e51d15cb6c3177f72c6c927#09e2a9d52bf7f2f11e51d15cb6c3177f72c6c927"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -149,8 +150,8 @@ dependencies = [
 
 [[package]]
 name = "ethos-zero"
-version = "6.1.2"
-source = "git+https://github.com/LiGoldragon/ethos-zero?rev=daf007296a19ad2f9c8a1e67e102b2e3f09db327#daf007296a19ad2f9c8a1e67e102b2e3f09db327"
+version = "10.0.0"
+source = "git+https://github.com/LiGoldragon/ethos-zero?rev=4bf73cae8d4f5a2072c76a11cd2f00aa3fe9f8e3#4bf73cae8d4f5a2072c76a11cd2f00aa3fe9f8e3"
 dependencies = [
  "datom-codec",
  "prettyplease 0.3.0",
@@ -283,7 +284,7 @@ dependencies = [
 
 [[package]]
 name = "harness"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "kameo",
  "message",
@@ -619,8 +620,8 @@ dependencies = [
 
 [[package]]
 name = "protos"
-version = "0.29.0"
-source = "git+https://github.com/LiGoldragon/protos?rev=aac95b0d08a4c7eb7f73c8ea18309f9e2e89315f#aac95b0d08a4c7eb7f73c8ea18309f9e2e89315f"
+version = "0.31.0"
+source = "git+https://github.com/LiGoldragon/protos?rev=1febca7836bf8d5f5973a302fdd50aa9c84c159b#1febca7836bf8d5f5973a302fdd50aa9c84c159b"
 
 [[package]]
 name = "ptr_meta"
@@ -907,8 +908,8 @@ dependencies = [
 
 [[package]]
 name = "signal-terminal"
-version = "1.0.1"
-source = "git+https://github.com/LiGoldragon/signal-terminal.git?rev=ddbd3237a57e3ca19b5f6208a93770c5eee73aa3#ddbd3237a57e3ca19b5f6208a93770c5eee73aa3"
+version = "4.0.0"
+source = "git+https://github.com/LiGoldragon/signal-terminal.git?rev=a3e4f96bf2eb2095e377a73a31ee927ef3e6b44f#a3e4f96bf2eb2095e377a73a31ee927ef3e6b44f"
 dependencies = [
  "ethos-zero",
  "rkyv",
