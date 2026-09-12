@@ -28,14 +28,6 @@ path = "src/bin/harness_daemon.rs"
 name = "flow-id"
 path = "src/bin/flow_id.rs"
 
-[[bin]]
-name = "harness-claude-artifact-observer-test"
-path = "src/bin/harness_claude_artifact_observer_test.rs"
-
-[[bin]]
-name = "harness-claude-session-stream-test"
-path = "src/bin/harness_claude_session_stream_test.rs"
-
 [[test]]
 name = "message_router_harness_e2e"
 path = "tests/message_router_harness_e2e.rs"
