@@ -16,6 +16,7 @@ pub mod runtime;
 pub mod schema;
 pub mod subscription;
 pub mod supervision;
+pub mod wake;
 pub mod terminal;
 pub mod transcript;
 
@@ -67,3 +68,5 @@ pub use terminal::{
     TerminalDeliveryReceipt,
 };
 pub use transcript::{TranscriptEvent, TranscriptLine};
+
+pub use wake::{WakeDeliveryAdapter, WakeDeliveryFailure, WakeDeliveryOutcome, WakeRequest};
