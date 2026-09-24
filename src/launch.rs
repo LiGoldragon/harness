@@ -39,6 +39,18 @@ impl HarnessLaunchCommand {
     /// Cooperative-channel flag from the adopted Claude live-delivery
     /// posture; its effectiveness on the installed build is unverified.
     const CLAUDE_COOPERATIVE_CHANNEL_FLAG: &'static str = "--channels";
+    const CLAUDE_CHILD_SESSION_ENVIRONMENT: &'static str = "CLAUDE_CODE_CHILD_SESSION";
+    const CLAUDE_SKIP_PERMISSIONS_FLAG: &'static str = "--dangerously-skip-permissions";
+
+    fn without_environment_variable(variable: &str, program: &str, arguments: Vec<String>) -> Self {
+        let mut isolated_arguments =
+            vec!["-u".to_string(), variable.to_string(), program.to_string()];
+        isolated_arguments.extend(arguments);
+        Self {
+            program: "env".to_string(),
+            arguments: isolated_arguments,
+        }
+    }
 
     #[allow(clippy::result_large_err)]
     fn for_request(request: &SessionLaunchRequest) -> Result<Self, SessionLaunchRefused> {
@@ -48,10 +60,15 @@ impl HarnessLaunchCommand {
                 program: "pi".to_string(),
                 arguments: vec![prompt],
             }),
-            HarnessKind::Claude => Ok(Self {
-                program: "claude".to_string(),
-                arguments: vec![Self::CLAUDE_COOPERATIVE_CHANNEL_FLAG.to_string(), prompt],
-            }),
+            HarnessKind::Claude => Ok(Self::without_environment_variable(
+                Self::CLAUDE_CHILD_SESSION_ENVIRONMENT,
+                "claude",
+                vec![
+                    Self::CLAUDE_COOPERATIVE_CHANNEL_FLAG.to_string(),
+                    Self::CLAUDE_SKIP_PERMISSIONS_FLAG.to_string(),
+                    prompt,
+                ],
+            )),
             HarnessKind::Codex => Err(SessionLaunchRefused {
                 request: request.clone(),
                 reason: SessionLaunchRefusalReason::HarnessKindUnsupported,
@@ -343,10 +360,48 @@ mod tests {
         let command =
             HarnessLaunchCommand::for_request(&request(HarnessKind::Claude, "You are agent xk3f."))
                 .expect("claude spawn row");
-        assert_eq!(command.program, "claude");
+        assert_eq!(command.program, "env");
         assert_eq!(
             command.arguments,
-            vec!["--channels".to_string(), "You are agent xk3f.".to_string()]
+            vec![
+                "-u".to_string(),
+                "CLAUDE_CODE_CHILD_SESSION".to_string(),
+                "claude".to_string(),
+                "--channels".to_string(),
+                "--dangerously-skip-permissions".to_string(),
+                "You are agent xk3f.".to_string(),
+            ]
         );
+        assert_eq!(
+            command
+                .arguments
+                .iter()
+                .filter(|argument| argument.as_str() == "You are agent xk3f.")
+                .count(),
+            1
+        );
+        assert_eq!(
+            command.arguments.last().map(String::as_str),
+            Some("You are agent xk3f.")
+        );
+    }
+
+    #[test]
+    fn environment_wrapper_removes_the_variable_from_the_actual_child_process() {
+        let command = HarnessLaunchCommand::without_environment_variable(
+            HarnessLaunchCommand::CLAUDE_CHILD_SESSION_ENVIRONMENT,
+            "sh",
+            vec![
+                "-c".to_string(),
+                "if [ \"${CLAUDE_CODE_CHILD_SESSION+present}\" = present ]; then exit 23; fi"
+                    .to_string(),
+            ],
+        );
+        let status = Command::new(&command.program)
+            .args(&command.arguments)
+            .env(HarnessLaunchCommand::CLAUDE_CHILD_SESSION_ENVIRONMENT, "1")
+            .status()
+            .expect("environment wrapper witness");
+        assert!(status.success());
     }
 }
