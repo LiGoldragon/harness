@@ -151,6 +151,16 @@
           flow-id-claude-validation = context.cargoTest "flow_id" "claude_rejects_noncanonical_unsupported_version_and_invalid_variant_parent_sessions_without_claiming_a_lane";
           flow-id-claude-exhaustion = context.cargoTest "flow_id" "claude_fails_closed_when_every_eligible_literal_hex_candidate_is_occupied";
           flow-id-publication-race = context.cargoLibTest "flow_id::tests::claude_first_creator_publishes_complete_marker_only_after_the_stable_claim_lock";
+          usage-claude-limits-normalized = context.cargoTest "usage_documents" "claude_limits_list_is_normalized_by_group_with_named_durations";
+          usage-claude-unrecognized-windows-retained = context.cargoTest "usage_documents" "claude_unrecognized_present_windows_are_retained_by_name";
+          usage-codex-every-limit-and-window = context.cargoTest "usage_documents" "codex_every_limit_and_every_declared_window_is_enumerated";
+          usage-pace-unknown-operands = context.cargoTest "usage_documents" "pace_is_unknown_whenever_an_operand_is_unknown_or_stale";
+          usage-claude-token-only-in-header = context.cargoTest "usage_sources" "claude_token_reaches_only_the_authorization_header";
+          usage-claude-expired-token-never-sent = context.cargoTest "usage_sources" "expired_claude_token_is_reported_and_never_sent";
+          usage-codex-same-account-homes-deduplicated = context.cargoTest "usage_sources" "codex_same_account_homes_are_one_subscription_and_failures_stay_per_home";
+          usage-codex-thread-context = context.cargoTest "usage_sources" "codex_loaded_threads_report_bound_context_and_unbound_threads";
+          usage-claude-session-context = context.cargoTest "usage_sources" "claude_live_sessions_report_transcript_proxy_and_its_states";
+          usage-provider-failure-isolated = context.cargoTest "usage_sources" "one_read_carries_both_providers_when_one_fails";
         }
       );
 

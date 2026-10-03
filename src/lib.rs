@@ -18,6 +18,7 @@ pub mod subscription;
 pub mod supervision;
 pub mod terminal;
 pub mod transcript;
+pub mod usage;
 
 pub use claude::{
     ClaudeArtifactEventWatcher, ClaudeArtifactObserver, ClaudeArtifactSnapshot,

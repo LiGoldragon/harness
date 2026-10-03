@@ -1,6 +1,6 @@
 [package]
 name         = "harness"
-version      = "0.4.0"
+version      = "0.5.0"
 edition      = "2024"
 rust-version = "1.89"
 license      = "MIT OR Apache-2.0"
@@ -49,6 +49,10 @@ nota               = { package = "nota", git = "https://github.com/LiGoldragon/n
 rkyv                    = { version = "0.8", default-features = false, features = ["std", "bytecheck", "little_endian", "pointer_width_32", "unaligned"] }
 signal-frame           = { git = "https://github.com/LiGoldragon/signal-frame.git", branch = "main" }
 signal-harness         = { git = "https://github.com/LiGoldragon/signal-harness.git", branch = "main" }
+usage-contract          = { package = "signal-harness", git = "https://github.com/LiGoldragon/signal-harness.git", rev = "9b5bd0eeb706760f1dd996c4a97119935003a53c" }
+time                    = { version = "0.3", features = ["parsing"] }
+tungstenite             = { version = "0.28", default-features = false, features = ["handshake"] }
+ureq                    = { version = "3", default-features = false, features = ["rustls"] }
 signal-persona         = { git = "https://github.com/LiGoldragon/signal-persona.git", branch = "main" }
 signal-terminal        = { git = "https://github.com/LiGoldragon/signal-terminal.git", rev = "ddbd3237a57e3ca19b5f6208a93770c5eee73aa3" }
 serde_json              = "1"
@@ -71,6 +75,9 @@ dead_code = "warn"
 
 [dev-dependencies]
 tempfile      = "3"
+usage-contract = { package = "signal-harness", git = "https://github.com/LiGoldragon/signal-harness.git", rev = "9b5bd0eeb706760f1dd996c4a97119935003a53c", features = ["datom"] }
+datom-codec   = { git = "https://github.com/LiGoldragon/datom-codec", rev = "6dccc76b75918a91d3370a9d4fe88aa7dd567876" }
+protos        = { git = "https://github.com/LiGoldragon/protos", rev = "171b21f65337983ab624b7b906397a4f1f92c5a3" }
 
 [patch.crates-io]
 kameo = { git = "https://github.com/LiGoldragon/kameo.git", branch = "main" }

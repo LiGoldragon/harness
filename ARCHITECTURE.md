@@ -181,6 +181,36 @@ stateDiagram-v2
     Closed --> [*]
 ```
 
+## 1.7 · Subscription-usage snapshot
+
+`src/usage/` reads one fresh, read-only `UsageSnapshot` (the
+`signal-harness` 5.0.0 `UsageSnapshotQuery` reply): every Claude and Codex
+subscription's quota limits and windows, and every live session's context.
+It is paced by invocation; it has no watch, timer, store or token refresh.
+
+- Claude quota: the module reads `~/.claude/.credentials.json`, refuses an
+  expiring token (`AccessTokenExpired`, never refreshed), and calls the fixed
+  OAuth usage endpoint with the token only in the `Authorization` header.
+  `limits[]` is normalized first; unrecognized non-null top-level windows are
+  kept by name.
+- Codex quota: every `~/.codex*` home with a login is asked through its own
+  app-server control socket (WebSocket over Unix, `initialize` then
+  `account/rateLimits/read`); homes answering for one account are one
+  subscription, and every limit id and server-declared window is kept.
+- Context: live Claude sessions from `~/.claude/sessions/<pid>.json` and the
+  transcript tail's last request (a proxy; percentage unknown without a
+  status-line snapshot); loaded Codex threads from `thread/loaded/list`,
+  `thread/read` and the rollout's last `token_count`. Superseded and unbound
+  states are kept.
+- Every read is bounded in bytes and time, and every failure is a typed
+  category; one provider's failure never removes the other's result.
+
+Not yet wired: the daemon-level dispatch and the `harness` CLI path. The rest
+of this crate still speaks the pre-Datom `signal-harness` 0.4.0, so the
+module consumes the 5.0.0 contract under the dependency name
+`usage-contract`; dispatch lands with the crate's migration to the Datom
+contract.
+
 ## 2 · State and Ownership
 
 The harness component owns live harness identity and lifecycle state.
@@ -317,6 +347,7 @@ src/runtime.rs            Kameo lifecycle and transcript state owner
 src/terminal.rs           terminal delivery adapter records
 src/pi.rs                 Pi RPC/JSONL process adapter
 src/transcript.rs         transcript event records
+src/usage/                one-shot subscription-usage snapshot (quota and context)
 tests/                    harness smoke, daemon, CLI, and actor-runtime tests
 ```
 
@@ -325,6 +356,11 @@ tests/                    harness smoke, daemon, CLI, and actor-runtime tests
 | Constraint | Test |
 |---|---|
 | Harness identity projection keeps full, redacted, and hidden views distinct. | `nix flake check .#harness-identity-projection-views` |
+| The Claude usage token reaches only the `Authorization` header and no reply. | `nix flake check .#usage-claude-token-only-in-header` |
+| An expired Claude token is reported and never sent. | `nix flake check .#usage-claude-expired-token-never-sent` |
+| Same-account Codex homes are one subscription; other homes fail per home. | `nix flake check .#usage-codex-same-account-homes-deduplicated` |
+| One provider's failure never removes the other's snapshot result. | `nix flake check .#usage-provider-failure-isolated` |
+| A pace figure exists only with all its operands known and current. | `nix flake check .#usage-pace-unknown-operands` |
 | A Codex parent claims one stable alias from its UUID and prints no other stdout. | `nix flake check .#flow-id` |
 | A Claude parent claims the first six literal hex characters of its UUIDv4 or UUIDv5 parent session. | `nix flake check .#flow-id-claude` |
 | Claude rejects noncanonical, unsupported-version, and invalid-variant parent sessions before claiming a lane. | `nix flake check .#flow-id-claude-validation` |
