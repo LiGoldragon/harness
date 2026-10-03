@@ -359,6 +359,10 @@ This repo does not own:
   the consumer.
 - Transcript deltas carry a strictly-increasing `HarnessTranscriptSequence`.
 
+## 5 · Consumers on older contracts
+
+Persona (both the lowercase persona checkout, including branch f6db8d-arity-front, and uppercase Persona) and Mentci (pinned in CriomOS-home at a1eb5e2) still build against pre-8.0.0 signal-harness; neither is selected by Home for the harness service; Mentci builds Harness types in-process and never talks to the daemon; migrating them is deferred until either is selected; nothing claims they are compatible with signal-harness 8.0.0.
+
 ## Code Map
 
 ```text
