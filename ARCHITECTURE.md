@@ -59,11 +59,16 @@ flowchart LR
 
 `harness` exposes:
 
-- `harness`, the ordinary thin CLI client for `signal-harness`;
+- `harness`, the ordinary thin CLI client for `signal-harness`: one inline
+  Datom `Query` argument, one Datom `Response` printed;
 - `meta-harness`, the owner/meta thin CLI client for
-  `meta-signal-harness`;
-- `harness-daemon`, the managed runtime daemon that binds the working
-  and owner-only meta sockets from a single binary startup record;
+  `meta-signal-harness`, of the same one-argument Datom shape;
+- `harness-usage`, the human view of one usage snapshot: it sends
+  `UsageSnapshotQuery` and prints each window's remaining share, time left,
+  local reset and the rate to use the remainder by that reset;
+- `harness-daemon`, the managed runtime daemon that binds the ordinary,
+  owner-only meta and supervision sockets from a single binary startup
+  record;
 - `flow-id`, the parent-only filesystem claim CLI for one shared flow alias:
   Codex claims normalized UUID characters `[23:29]`, while Claude claims the
   first six literal hexadecimal characters of a canonical lowercase UUIDv4 or
@@ -89,17 +94,25 @@ stream.
 
 ## 1.5 · Lifecycle FSM and supervision-relation reception
 
-The harness daemon first decodes owner-only meta traffic as
-`meta-signal-harness`. Its current `Configure` implementation is not built
-yet, so it replies with typed `MetaHarnessReply::RequestUnimplemented`.
-If a frame is not the meta-harness contract, the same socket falls back to
-Persona supervision and answers from a canonical `SupervisionPhase` Kameo
-actor. The daemon receives exactly one
-startup argument: a `signal_harness::HarnessDaemonConfiguration`
-record supplied as a signal-encoded/rkyv file path. Inline NOTA and `.nota`
-startup files are rejected before daemon-specific decoding. That record carries
-the harness socket path and mode, supervision socket path and mode, owner
-identity, and a list of typed
+Every socket carries one contract, one `signal` frame per value: a
+four-byte big-endian length and the rkyv archive of the contract root, with
+no envelope, exchange identifier or contract discriminator. The ordinary
+socket carries `signal-harness` `Query` and `Response`; on a watch connection
+every later frame is a `Response`, stream events riding
+`Response::HarnessTranscriptEvent` with their subscription token. The
+owner-only meta socket (bound at `0o600` by the daemon shape) carries
+`meta-signal-harness`; its `Configure` is not built yet and replies with a
+typed `RequestUnimplemented`. The supervision socket, bound by the engine
+with its configured mode, carries the `signal-persona` engine-management
+lifecycle and answers announce, readiness, health and stop. Meta and
+supervision never share a socket, because a frame does not say which
+contract it holds.
+
+The daemon receives exactly one startup argument: a
+`signal_harness::HarnessDaemonConfiguration` record supplied as a
+signal-encoded/rkyv file path. Inline text startup files are rejected before
+daemon-specific decoding. That record carries the ordinary, meta and
+supervision socket paths and modes, owner identity, and a list of typed
 `HarnessInstanceConfiguration` records. Each instance record carries the
 harness name, `HarnessKind`, optional terminal socket, and optional
 `PiRpcJsonlAdapterConfiguration` that starts the programmatic Pi intake
@@ -112,7 +125,7 @@ One `harness-daemon` process may own multiple harness instances; those
 boundaries are in-process actors/adapters unless a future deployment
 requires process isolation.
 
-The owner-only meta surface handles `ResolveModel(ModelResolutionRequest)`
+The meta surface handles `ResolveModel(ModelResolutionRequest)`
 in `harness`, not in orchestrate or a `meta-*` crate. The runtime resolves
 an exact model selector or a named capability profile against the configured
 harness adapters, returns `ModelResolved` with the chosen harness, closed
@@ -183,33 +196,44 @@ stateDiagram-v2
 
 ## 1.7 · Subscription-usage snapshot
 
-`src/usage/` reads one fresh, read-only `UsageSnapshot` (the
-`signal-harness` 5.0.0 `UsageSnapshotQuery` reply): every Claude and Codex
-subscription's quota limits and windows, and every live session's context.
-It is paced by invocation; it has no watch, timer, store or token refresh.
+`UsageSnapshotQuery` is answered at daemon scope, before any configured
+instance is looked up, so it needs no harness instance and launches no model
+session; the daemon may run with an empty instance set. `src/usage/` reads one
+fresh, read-only `UsageSnapshot`: every Claude and Codex subscription's quota
+limits and windows, and every live session's context. It is paced by
+invocation; it has no watch, timer, store, ledger or token refresh. The read
+runs off the async runtime and the daemon user's own `HOME`.
 
 - Claude quota: the module reads `~/.claude/.credentials.json`, refuses an
   expiring token (`AccessTokenExpired`, never refreshed), and calls the fixed
   OAuth usage endpoint with the token only in the `Authorization` header.
-  `limits[]` is normalized first; unrecognized non-null top-level windows are
-  kept by name.
+  The named top-level windows (`five_hour`, `seven_day`) and every `limits[]`
+  entry are each enumerated; only a named window carries a duration, never
+  one inferred from a shared reset time.
 - Codex quota: every `~/.codex*` home with a login is asked through its own
   app-server control socket (WebSocket over Unix, `initialize` then
   `account/rateLimits/read`); homes answering for one account are one
   subscription, and every limit id and server-declared window is kept.
+- Percentages are shares only from 0 to 100; anything else is an unreadable
+  window, never clamped. A passed reset leaves the window's values stale.
+- Each window carries its reset countdown and local reset (in the host's
+  configured zone) as its own state, and three separate derivations: the
+  rate to use the remainder by the reset (`r / T`, needing no duration), the
+  uniform rate over a known duration, and the elapsed position of a fixed
+  period (unavailable: neither provider establishes fixed-period semantics).
+  The planning projection is `NotConfigured`.
+- Auxiliary allowance, credit and spend/control facts are named as unmodeled
+  source facts, never made quota windows.
 - Context: live Claude sessions from `~/.claude/sessions/<pid>.json` and the
   transcript tail's last request (a proxy; percentage unknown without a
   status-line snapshot); loaded Codex threads from `thread/loaded/list`,
   `thread/read` and the rollout's last `token_count`. Superseded and unbound
-  states are kept.
-- Every read is bounded in bytes and time, and every failure is a typed
-  category; one provider's failure never removes the other's result.
-
-Not yet wired: the daemon-level dispatch and the `harness` CLI path. The rest
-of this crate still speaks the pre-Datom `signal-harness` 0.4.0, so the
-module consumes the 5.0.0 contract under the dependency name
-`usage-contract`; dispatch lands with the crate's migration to the Datom
-contract.
+  states are kept. No Flow identifier is derived from a session name or id.
+- Every read is bounded in bytes and time. Every attempted provider, home
+  and context collector appears in the reply: a failure is a typed
+  unavailable result with its time and cause, a collector that failed
+  outright is `CollectorFailed`, and one provider's failure never removes the
+  other's result.
 
 ## 2 · State and Ownership
 
@@ -285,13 +309,14 @@ This repo does not own:
 - Live harness lifecycle and transcript state belongs inside Kameo actors.
 - Adapter capabilities are explicit typed records, not stringly flags.
 - Fixture-only terminal endpoints cannot claim real terminal delivery.
-- The daemon accepts length-prefixed `signal-harness` frames.
-- The `harness` CLI sends one ordinary `signal-harness` request and prints
-  one typed NOTA reply.
+- Each daemon socket carries exactly one contract's plain `signal` frames.
+- The `harness` CLI sends one ordinary `signal-harness` request from one
+  inline Datom argument and prints one Datom reply.
 - The `meta-harness` CLI sends one privileged `meta-signal-harness` request
-  and prints one typed NOTA reply.
-- The daemon's meta socket recognizes `meta-signal-harness` before falling
-  back to Persona supervision.
+  from one inline Datom argument and prints one Datom reply.
+- `harness-usage` takes no argument, sends `UsageSnapshotQuery`, and prints
+  the human view.
+- `UsageSnapshotQuery` is answered before any instance lookup.
 - The daemon applies the managed spawn-envelope socket mode to `harness.sock`
   before accepting client traffic.
 - The daemon turns `MessageDelivery` into terminal input only when a typed
@@ -347,7 +372,9 @@ src/runtime.rs            Kameo lifecycle and transcript state owner
 src/terminal.rs           terminal delivery adapter records
 src/pi.rs                 Pi RPC/JSONL process adapter
 src/transcript.rs         transcript event records
-src/usage/                one-shot subscription-usage snapshot (quota and context)
+src/usage/                one-shot subscription-usage snapshot (quota and context) and its human view
+src/wire.rs               the plain Signal frame every socket speaks
+src/bin/harness_usage.rs  the harness-usage human-view client
 tests/                    harness smoke, daemon, CLI, and actor-runtime tests
 ```
 
@@ -360,7 +387,15 @@ tests/                    harness smoke, daemon, CLI, and actor-runtime tests
 | An expired Claude token is reported and never sent. | `nix flake check .#usage-claude-expired-token-never-sent` |
 | Same-account Codex homes are one subscription; other homes fail per home. | `nix flake check .#usage-codex-same-account-homes-deduplicated` |
 | One provider's failure never removes the other's snapshot result. | `nix flake check .#usage-provider-failure-isolated` |
-| A pace figure exists only with all its operands known and current. | `nix flake check .#usage-pace-unknown-operands` |
+| The countdown is its own state; a known reset keeps its rate without a duration. | `nix build .#checks.<system>.usage-countdown-own-state`; `nix build .#checks.<system>.usage-no-duration-inferred-from-reset` |
+| A passed reset leaves stale values and divides nothing; a full share has a zero rate. | `nix build .#checks.<system>.usage-reset-at-observation-passed`; `nix build .#checks.<system>.usage-full-share-zero-rate` |
+| Percentages outside 0 to 100 are unreadable, never clamped. | `nix build .#checks.<system>.usage-percent-domain` |
+| Rates round toward zero; the weekly uniform rate is 100/7 percent a day. | `nix build .#checks.<system>.usage-rate-rounding` |
+| The elapsed position needs fixed-period semantics. | `nix build .#checks.<system>.usage-elapsed-needs-fixed-period` |
+| Auxiliary allowance and spend facts are named, never windows. | `nix build .#checks.<system>.usage-claude-auxiliary-facts-named`; `nix build .#checks.<system>.usage-codex-every-limit-window-and-fact` |
+| Every attempted context source and collector reports its failure. | `nix build .#checks.<system>.usage-codex-context-source-failures`; `nix build .#checks.<system>.usage-claude-registry-failures`; `nix build .#checks.<system>.usage-collector-failed` |
+| The daemon answers the usage query with no configured instance; both clients print it in one call. | `nix build .#checks.<system>.usage-daemon-scope-without-instances`; `nix build .#checks.<system>.usage-both-clients-one-call` |
+| The human view leads with remaining, time left, local reset and the remainder rate. | `nix build .#checks.<system>.usage-cli-human-view` |
 | A Codex parent claims one stable alias from its UUID and prints no other stdout. | `nix flake check .#flow-id` |
 | A Claude parent claims the first six literal hex characters of its UUIDv4 or UUIDv5 parent session. | `nix flake check .#flow-id-claude` |
 | Claude rejects noncanonical, unsupported-version, and invalid-variant parent sessions before claiming a lane. | `nix flake check .#flow-id-claude-validation` |
@@ -372,10 +407,10 @@ tests/                    harness smoke, daemon, CLI, and actor-runtime tests
 | `HarnessKind` has no command-line argument projection table. | `nix flake check .#harness-kind-has-no-command-line-argument-projection` |
 | Harness daemon accepts `HarnessKind::Fixture` from a single binary configuration argument. | `cargo test --test daemon harness_daemon_accepts_fixture_kind_from_single_binary_configuration_argument` |
 | Harness daemon accepts `HarnessKind::Codex` from a single binary configuration argument. | `cargo test --test daemon harness_daemon_accepts_codex_kind_from_single_binary_configuration_argument` |
-| Harness daemon rejects inline NOTA and `.nota` configuration arguments. | `cargo test --test daemon harness_daemon_configuration_rejects` |
 | Harness daemon rejects multiple configuration arguments before daemon construction. | `nix flake check .#harness-daemon-configuration-rejects-multiple-arguments` |
 | Harness daemon applies the configured working socket mode. | `nix flake check .#harness-daemon-binds-working-socket-with-configured-mode` |
-| Harness daemon uses the configured working socket mode while keeping the owner-only meta socket at daemon-shape mode. | `nix flake check .#harness-daemon-applies-configured-working-socket-mode-and-owner-only-supervision` |
+| Harness daemon applies the configured working and supervision socket modes while keeping the meta socket owner-only by daemon shape. | `nix build .#checks.<system>.harness-daemon-applies-configured-socket-modes-and-owner-only-meta` |
+| Meta and supervision are separate sockets; the supervision socket does not answer a meta request. | `nix build .#checks.<system>.harness-daemon-keeps-meta-and-supervision-on-separate-sockets` |
 | Harness daemon delivers message bytes to a configured terminal endpoint. | `nix flake check .#harness-daemon-delivers-message-to-terminal-endpoint` |
 | Harness daemon dispatches two harness instances inside one process by `HarnessName`. | `cargo test --test daemon harness_daemon_dispatches_two_harness_instances_inside_one_process` |
 | Harness daemon delivers Pi-kind messages through the Pi RPC/JSONL adapter. | `cargo test --test daemon harness_daemon_delivers_message_to_pi_rpc_endpoint` |
@@ -383,7 +418,7 @@ tests/                    harness smoke, daemon, CLI, and actor-runtime tests
 | Harness daemon rejects message delivery without a terminal endpoint. | `nix flake check .#harness-daemon-rejects-message-delivery-without-terminal-endpoint` |
 | Harness daemon answers status/readiness through its Signal boundary. | `nix flake check .#harness-daemon-answers-status-readiness` |
 | Harness daemon returns typed unimplemented for valid unfinished requests. | `nix flake check .#harness-daemon-returns-typed-unimplemented` |
-| Harness daemon recognizes the meta-harness policy contract before Persona supervision fallback. | `nix flake check .#harness-daemon-answers-meta-harness-relation` |
+| Harness daemon answers the meta-harness policy contract on its meta socket. | `nix flake check .#harness-daemon-answers-meta-harness-relation` |
 | Harness daemon resolves exact Pi model requests and capability/profile requests through the owner-only meta surface. | `nix build .#checks.<system>.harness-daemon-resolves-exact-pi-model-request`; `nix build .#checks.<system>.harness-daemon-resolves-capability-profile-request` |
 | Harness daemon returns typed model-unavailable reasons and validates provider continuation handles at the harness boundary. | `nix build .#checks.<system>.harness-daemon-returns-typed-model-unavailable-reasons`; `nix build .#checks.<system>.harness-daemon-validates-continuation-handles-at-harness-boundary`; `nix build .#checks.<system>.harness-daemon-reports-adapter-configuration-missing-for-unlaunchable-match` |
 | `harness` reaches the ordinary working socket and prints a typed reply. | `nix flake check .#harness-cli-reaches-working-socket` |

@@ -19,6 +19,7 @@ pub mod supervision;
 pub mod terminal;
 pub mod transcript;
 pub mod usage;
+pub mod wire;
 
 pub use claude::{
     ClaudeArtifactEventWatcher, ClaudeArtifactObserver, ClaudeArtifactSnapshot,
@@ -27,14 +28,15 @@ pub use claude::{
     ClaudeToolResult,
 };
 pub use claude_session::ObservedClaudeTurn;
-pub use cli_argument::NotaCommandText;
-pub use client::{HarnessClient, HarnessCommandEnvironment, HarnessCommandLine, HarnessEndpoint};
+pub use cli_argument::{DatomArgument, DatomPrint};
+pub use client::{
+    HarnessClient, HarnessCommandEnvironment, HarnessCommandLine, HarnessEndpoint, UsageCommandLine,
+};
 pub use command::HarnessDaemonConfigurationFile;
 pub use configuration::Configuration;
 pub use daemon::{
-    BoundHarnessInstances, HandleHarnessRequest, HarnessEngine, HarnessInstance,
+    AddressedHarness, BoundHarnessInstances, HandleHarnessRequest, HarnessEngine, HarnessInstance,
     HarnessProcessDaemon, HarnessRequestHandler, HarnessRuntimeConfiguration,
-    ReceivedHarnessRequest, WorkingHarnessEvent, WorkingSupervisionReply,
 };
 pub use delivery::{HarnessDeliveryAdapter, HarnessDeliveryReceipt};
 pub use error::{Error, Result};
@@ -59,12 +61,10 @@ pub use subscription::{
     TranscriptStreamingReplyHandlerStatus, TranscriptSubscriptionManager,
     TranscriptSubscriptionManagerStatus, TranscriptSubscriptionSink,
 };
-pub use supervision::{
-    HandleSupervisionRequest, ReceivedSupervisionRequest, SupervisionPhase, SupervisionPhaseReply,
-    SupervisionProfile,
-};
+pub use supervision::{SupervisionListener, SupervisionProfile, SupervisionSocket};
 pub use terminal::{
     HarnessTerminalBinding, HarnessTerminalDelivery, HarnessTerminalEndpoint, TerminalDeliveryPath,
     TerminalDeliveryReceipt,
 };
 pub use transcript::{TranscriptEvent, TranscriptLine};
+pub use wire::SignalWire;

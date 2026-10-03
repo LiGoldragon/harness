@@ -10,14 +10,15 @@ use std::time::Duration;
 use datom_codec::Datomizable;
 use harness::usage::{
     AppServerTimeout, ClaudeLiveSessions, ClaudeUsageEndpoint, ClaudeUsageSource, CodexLiveThreads,
-    CodexUsageSource, ContextSource, ObservationInstant, QuotaSource, UsageHome,
+    CodexUsageSource, ContextSource, LocalZone, ObservationInstant, QuotaSource, UsageHome,
     UsageSnapshotReader, UsageSnapshotReading,
 };
 use protos::{Protosizable, Textualizable};
 use serde_json::{Value, json};
-use usage_contract::{
-    ContextBasis, ContextFreshness, ContextUnavailableReason, SessionContextObservation,
-    SubscriptionObservation, UsageProvider, UsageUnavailableReason,
+use signal_harness::{
+    ContextBasis, ContextFreshness, ContextSourceFailureReason, ContextUnavailableReason,
+    PlanningProjection, SessionContextObservation, SubscriptionObservation, UsageProvider,
+    UsageUnavailableReason,
 };
 use usage_fixtures::{
     AppServerBehavior, FIXTURE_TOKEN, FakeAppServer, FakeClaudeEndpoint, FixtureHome,
@@ -55,6 +56,7 @@ fn claude_quota(home: &FixtureHome, endpoint: &FakeClaudeEndpoint) -> Vec<Subscr
     ClaudeUsageSource::new(
         UsageHome::new(home.path()),
         ClaudeUsageEndpoint::recorded(endpoint.url.clone()),
+        LocalZone::named("UTC"),
     )
     .observe_quota(ObservationInstant::now())
 }
@@ -69,7 +71,7 @@ fn claude_token_reaches_only_the_authorization_header() {
         panic!("Claude usage observed: {observations:?}");
     };
     assert_eq!(usage.plan_name_option.as_deref(), Some("max"));
-    assert_eq!(usage.quota_limits.len(), 2);
+    assert_eq!(usage.quota_limits.len(), 4);
 
     let requests = endpoint.requests.lock().expect("requests").clone();
     assert_eq!(requests.len(), 1);
@@ -165,6 +167,7 @@ fn codex_same_account_homes_are_one_subscription_and_failures_stay_per_home() {
     let observations = CodexUsageSource::new(
         UsageHome::new(home.path()),
         AppServerTimeout::new(Duration::from_millis(400)),
+        LocalZone::named("UTC"),
     )
     .observe_quota(ObservationInstant::now());
     let observed: Vec<_> = observations
@@ -204,9 +207,12 @@ fn codex_same_account_homes_are_one_subscription_and_failures_stay_per_home() {
 #[test]
 fn no_codex_home_is_reported_unavailable() {
     let home = FixtureHome::new();
-    let observations =
-        CodexUsageSource::new(UsageHome::new(home.path()), AppServerTimeout::default())
-            .observe_quota(ObservationInstant::now());
+    let observations = CodexUsageSource::new(
+        UsageHome::new(home.path()),
+        AppServerTimeout::default(),
+        LocalZone::named("UTC"),
+    )
+    .observe_quota(ObservationInstant::now());
     assert_eq!(
         reasons(&observations),
         [(None, UsageUnavailableReason::NoLiveControlSocket)]
@@ -272,7 +278,12 @@ fn codex_loaded_threads_report_bound_context_and_unbound_threads() {
         panic!("bound thread observed");
     };
     assert_eq!(first.usage_provider, UsageProvider::Codex);
-    assert_eq!(first.flow_identifier_option.as_deref(), Some("d66c26"));
+    // A Flow-shaped thread name is display metadata, not a witnessed binding.
+    assert_eq!(first.flow_identifier_option, None);
+    assert_eq!(
+        first.session_name_option.as_deref(),
+        Some("Mind.{ Astra d66c26 }")
+    );
     assert_eq!(
         first.context_basis,
         ContextBasis::CodexRolloutLastTokenCount
@@ -344,11 +355,16 @@ fn claude_live_sessions_report_transcript_proxy_and_its_states() {
 
     let observations = ClaudeLiveSessions::new(UsageHome::new(home.path()))
         .observe_context(ObservationInstant::now());
-    assert_eq!(observations.len(), 1, "dead pid ignored: {observations:?}");
+    assert_eq!(
+        observations.len(),
+        1,
+        "dead pid passed over: {observations:?}"
+    );
     let SessionContextObservation::Observed(context) = &observations[0] else {
         panic!("live session observed");
     };
-    assert_eq!(context.flow_identifier_option.as_deref(), Some("28d847"));
+    // A session identifier's prefix is not a witnessed Flow binding.
+    assert_eq!(context.flow_identifier_option, None);
     assert_eq!(context.context_freshness, ContextFreshness::Proxy);
     assert_eq!(context.context_tokens_option, Some(3210));
     assert_eq!(context.context_window_tokens_option, None);
@@ -399,8 +415,13 @@ fn one_read_carries_both_providers_when_one_fails() {
     let snapshot = UsageSnapshotReader::with_endpoint(
         UsageHome::new(home.path()),
         ClaudeUsageEndpoint::recorded(endpoint.url.clone()),
+        LocalZone::named("UTC"),
     )
     .read_snapshot();
+    assert_eq!(
+        snapshot.planning_projection,
+        PlanningProjection::NotConfigured
+    );
     let providers: Vec<(UsageProvider, bool)> = snapshot
         .subscription_observations
         .iter()
@@ -428,7 +449,7 @@ fn one_read_carries_both_providers_when_one_fails() {
             })
     );
 
-    let text = usage_contract::Response::UsageSnapshot(snapshot)
+    let text = signal_harness::Response::UsageSnapshot(snapshot)
         .datomize(vec![])
         .protosize()
         .textualize();
@@ -442,4 +463,104 @@ fn one_read_carries_both_providers_when_one_fails() {
     ] {
         assert!(!text.contains(forbidden), "{forbidden} leaked into {text}");
     }
+}
+
+fn source_failures(
+    observations: &[SessionContextObservation],
+) -> Vec<(Option<String>, ContextSourceFailureReason)> {
+    observations
+        .iter()
+        .filter_map(|observation| match observation {
+            SessionContextObservation::SourceUnavailable(unavailable) => Some((
+                unavailable.account_home_option.clone(),
+                unavailable.context_source_failure_reason.clone(),
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn every_attempted_codex_context_source_reports_its_failure() {
+    let home = FixtureHome::new();
+    codex_homes(&home);
+    let observations = CodexLiveThreads::new(
+        UsageHome::new(home.path()),
+        AppServerTimeout::new(Duration::from_millis(400)),
+    )
+    .observe_context(ObservationInstant::now());
+    assert_eq!(
+        source_failures(&observations),
+        [
+            (
+                Some(".codex-gone".into()),
+                ContextSourceFailureReason::NoLiveControlSocket
+            ),
+            (
+                Some(".codex-hung".into()),
+                ContextSourceFailureReason::TransportTimedOut
+            ),
+            (
+                Some(".codex-rejecting".into()),
+                ContextSourceFailureReason::ProviderRejected
+            ),
+            (
+                Some(".codex-stale".into()),
+                ContextSourceFailureReason::NoLiveControlSocket
+            ),
+        ]
+    );
+
+    let empty = FixtureHome::new();
+    let observations =
+        CodexLiveThreads::new(UsageHome::new(empty.path()), AppServerTimeout::default())
+            .observe_context(ObservationInstant::now());
+    assert_eq!(
+        source_failures(&observations),
+        [(None, ContextSourceFailureReason::NoLiveControlSocket)]
+    );
+}
+
+#[test]
+fn an_absent_or_unreadable_claude_registry_is_reported_not_skipped() {
+    let absent = FixtureHome::new();
+    let observations = ClaudeLiveSessions::new(UsageHome::new(absent.path()))
+        .observe_context(ObservationInstant::now());
+    assert_eq!(
+        source_failures(&observations),
+        [(None, ContextSourceFailureReason::RegistryAbsent)]
+    );
+
+    let garbled = FixtureHome::new();
+    garbled.write(".claude/sessions/12345.json", "{ not json");
+    let observations = ClaudeLiveSessions::new(UsageHome::new(garbled.path()))
+        .observe_context(ObservationInstant::now());
+    assert_eq!(
+        source_failures(&observations),
+        [(None, ContextSourceFailureReason::RegistryEntryUnreadable)]
+    );
+}
+
+#[test]
+fn a_reader_that_cannot_run_reports_every_collector_failed() {
+    let snapshot = UsageSnapshotReader::failed_snapshot();
+    assert!(
+        snapshot
+            .subscription_observations
+            .iter()
+            .all(|observation| matches!(
+                observation,
+                SubscriptionObservation::Unavailable(unavailable)
+                    if unavailable.usage_unavailable_reason
+                        == UsageUnavailableReason::CollectorFailed
+            ))
+    );
+    assert_eq!(snapshot.subscription_observations.len(), 2);
+    assert_eq!(
+        source_failures(&snapshot.session_context_observations),
+        [
+            (None, ContextSourceFailureReason::CollectorFailed),
+            (None, ContextSourceFailureReason::CollectorFailed),
+        ]
+    );
 }

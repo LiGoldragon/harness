@@ -15,7 +15,7 @@ use signal_harness::{
     ClaudeSessionObservation, HarnessName, StatusTransitionCount, StreamedEventCount,
     ToolCallCount, TranscriptPath, TurnLaunch,
 };
-use signal_persona::TimestampNanos;
+use signal_persona::TimestampNanoseconds;
 
 use crate::ClaudeArtifactSnapshot;
 
@@ -62,7 +62,7 @@ impl ObservedClaudeTurn {
     }
 
     pub fn launch(&self) -> TurnLaunch {
-        self.launch
+        self.launch.clone()
     }
 
     pub fn lifecycle(&self) -> &ClaudeSessionLifecycle {
@@ -93,49 +93,47 @@ impl ObservedClaudeTurn {
     /// producer synthesizes no figure to fill the gap until that lands.
     pub fn into_session_observation(self) -> ClaudeSessionObservation {
         let recovered = self.snapshot.recovered_turn();
-        let session_identifier = recovered
-            .session_identifier()
-            .map(ClaudeSessionIdentifier::new);
-        let model = recovered.model().map(ClaudeModel::new);
+        let session_identifier: Option<ClaudeSessionIdentifier> =
+            recovered.session_identifier().map(str::to_owned);
+        let model: Option<ClaudeModel> = recovered.model().map(str::to_owned);
         let reached_end_of_turn = recovered.has_stop_reason_end_turn();
-        let tool_call_count = ToolCallCount::new(recovered.tool_calls().len() as u64);
-        let status_transition_count =
-            StatusTransitionCount::new(recovered.status_transitions().len() as u64);
-        let response = recovered.assistant_text().map(AssistantResponseText::new);
-        let transcript_path = self
+        let tool_call_count: ToolCallCount = recovered.tool_calls().len() as i64;
+        let status_transition_count: StatusTransitionCount =
+            recovered.status_transitions().len() as i64;
+        let response: Option<AssistantResponseText> = recovered.assistant_text();
+        let transcript_path: Option<TranscriptPath> = self
             .snapshot
             .project_jsonl_paths()
             .first()
-            .map(|path| TranscriptPath::new(path.display().to_string()));
+            .map(|path| path.display().to_string());
 
         ClaudeSessionObservation {
-            harness: self.harness,
-            session_identifier,
-            model,
-            launch: self.launch,
+            harness_name: self.harness,
+            claude_session_identifier_option: session_identifier,
+            claude_model_option: model,
+            turn_launch: self.launch,
             reached_end_of_turn,
             streamed_event_count: self.streamed_event_count,
             tool_call_count,
             status_transition_count,
-            transcript_path,
-            response,
+            transcript_path_option: transcript_path,
+            assistant_response_text_option: response,
             // DEFERRED — accumulated_context sourcing (bead primary-og38.1).
             // The spike proved headless emits no statusline; the psyche is
             // ruling between /context-at-rest and summed stream-json usage.
             // Until it lands, push None and synthesize nothing.
-            accumulated_context: None,
-            last_activity: Self::activity_timestamp(),
-            lifecycle: self.lifecycle,
+            context_tokens_option: None,
+            timestamp_nanoseconds: Self::activity_timestamp(),
+            claude_session_lifecycle: self.lifecycle,
         }
     }
 
     /// Mint the infrastructure-owned activity timestamp at observation time.
     /// Display/ordering only — never a resume gate.
-    fn activity_timestamp() -> TimestampNanos {
-        let nanos = SystemTime::now()
+    fn activity_timestamp() -> TimestampNanoseconds {
+        SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|elapsed| elapsed.as_nanos() as u64)
-            .unwrap_or(0);
-        TimestampNanos::new(nanos)
+            .map(|elapsed| i64::try_from(elapsed.as_nanos()).unwrap_or(i64::MAX))
+            .unwrap_or(0)
     }
 }

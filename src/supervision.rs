@@ -1,17 +1,27 @@
-use kameo::actor::{Actor, ActorRef, Spawn};
-use kameo::error::Infallible;
-use kameo::message::{Context, Message};
-use signal_frame::ExchangeIdentifier;
+//! The `signal-persona` engine-management lifecycle on its own socket.
+//!
+//! The supervision socket carries only the `signal-persona` engine-management
+//! `Query` and `Response`, one Signal frame each. It answers announce,
+//! readiness, health and stop for the harness component; it is bound by the
+//! engine beside the ordinary and meta listeners the daemon shell owns.
+
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
+
 use signal_persona::{
-    ComponentHealth, ComponentHealthReport, ComponentIdentity, ComponentKind, ComponentName,
-    ComponentReady, EngineManagementProtocolVersion, Frame as SupervisionFrame, FrameBody,
-    Operation as SupervisionRequest, Query as SupervisionQuery, Reply as SupervisionReply,
-    StopAcknowledgement,
+    ComponentHealth, ComponentIdentity, ComponentKind, ComponentName, LifecycleQuery,
+    Query as SupervisionQuery, Response as SupervisionResponse,
 };
+use tokio::net::{UnixListener, UnixStream};
 
-use crate::error::{Error, Result};
+use crate::Result;
+use crate::wire::SignalWire;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+const ENGINE_MANAGEMENT_PROTOCOL_VERSION: i64 = 1;
+
+/// The identity and health this component announces on its supervision
+/// socket.
+#[derive(Debug, Clone, PartialEq)]
 pub struct SupervisionProfile {
     name: ComponentName,
     kind: ComponentKind,
@@ -21,135 +31,105 @@ pub struct SupervisionProfile {
 impl SupervisionProfile {
     pub fn harness() -> Self {
         Self {
-            name: ComponentName::new("harness"),
+            name: "harness".to_string(),
             kind: ComponentKind::Harness,
             health: ComponentHealth::Running,
         }
     }
-}
 
-/// The engine-management lifecycle actor — announce, readiness, health, and
-/// graceful stop. The schema-emitted daemon shell accepts the owner-only
-/// supervision (meta) connection and the component drives this actor; the
-/// mailbox serialises every supervision exchange.
-#[derive(Debug)]
-pub struct SupervisionPhase {
-    profile: SupervisionProfile,
-    request_count: u64,
-}
-
-impl SupervisionPhase {
-    fn new(profile: SupervisionProfile) -> Self {
-        Self {
-            profile,
-            request_count: 0,
-        }
-    }
-
-    pub async fn start(profile: SupervisionProfile) -> ActorRef<Self> {
-        let reference = Self::spawn(Self::new(profile));
-        reference.wait_for_startup().await;
-        reference
-    }
-
-    pub async fn stop(reference: ActorRef<Self>) -> Result<()> {
-        reference
-            .stop_gracefully()
-            .await
-            .map_err(|error| Error::ActorCall(error.to_string()))?;
-        reference.wait_for_shutdown().await;
-        Ok(())
-    }
-
-    fn reply(&mut self, request: SupervisionRequest) -> SupervisionReply {
-        self.request_count = self.request_count.saturating_add(1);
+    /// The engine-management reply to one lifecycle request.
+    pub fn reply(&self, request: SupervisionQuery) -> SupervisionResponse {
         match request {
-            SupervisionRequest::Announce(_) => SupervisionReply::Identified(
-                ComponentIdentity::new(
-                    self.profile.name.clone(),
-                    self.profile.kind,
-                    EngineManagementProtocolVersion::new(1),
-                    None,
-                )
-                .into(),
-            ),
-            SupervisionRequest::Query(query) => match query.into_payload() {
-                SupervisionQuery::ReadinessStatus(_) => {
-                    SupervisionReply::Ready(ComponentReady::from_started_at(None).into())
-                }
-                SupervisionQuery::HealthStatus(_) => SupervisionReply::HealthReport(
-                    ComponentHealthReport::new(self.profile.health).into(),
-                ),
-            },
-            SupervisionRequest::Stop(_) => SupervisionReply::StopAcknowledged(
-                StopAcknowledgement::from_drain_completed_at(None).into(),
-            ),
-        }
-    }
-}
-
-#[derive(Debug, kameo::Reply)]
-pub struct SupervisionPhaseReply {
-    pub reply: SupervisionReply,
-}
-
-impl Actor for SupervisionPhase {
-    type Args = Self;
-    type Error = Infallible;
-
-    async fn on_start(
-        phase: Self::Args,
-        _actor_reference: ActorRef<Self>,
-    ) -> std::result::Result<Self, Self::Error> {
-        Ok(phase)
-    }
-}
-
-#[derive(Debug)]
-pub struct HandleSupervisionRequest {
-    pub request: SupervisionRequest,
-}
-
-impl Message<HandleSupervisionRequest> for SupervisionPhase {
-    type Reply = SupervisionPhaseReply;
-
-    async fn handle(
-        &mut self,
-        message: HandleSupervisionRequest,
-        _context: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        SupervisionPhaseReply {
-            reply: self.reply(message.request),
-        }
-    }
-}
-
-/// One decoded engine-management request plus its exchange identifier, as the
-/// daemon shell's owner-only meta (supervision) connection hook delivers it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReceivedSupervisionRequest {
-    pub exchange: ExchangeIdentifier,
-    pub request: SupervisionRequest,
-}
-
-impl ReceivedSupervisionRequest {
-    /// Decode one engine-management request off the bare (non-length-prefixed)
-    /// supervision `Frame` body the daemon shell delivers after stripping its
-    /// outer length-prefixed envelope.
-    pub fn decode(body: &[u8]) -> Result<Self> {
-        match SupervisionFrame::decode(body)?.into_body() {
-            FrameBody::Request { exchange, request } => {
-                let (request, tail) = request.payloads.into_head_and_tail();
-                if !tail.is_empty() {
-                    return Err(Error::UnexpectedSignalFrame {
-                        got: format!("expected one supervision operation, got {}", tail.len() + 1),
-                    });
-                }
-                Ok(Self { exchange, request })
-            }
-            other => Err(Error::UnexpectedSignalFrame {
-                got: format!("{other:?}"),
+            SupervisionQuery::Announce(_) => SupervisionResponse::Identified(ComponentIdentity {
+                component_name: self.name.clone(),
+                component_kind: self.kind.clone(),
+                engine_management_protocol_version: ENGINE_MANAGEMENT_PROTOCOL_VERSION,
+                component_startup_error_option: None,
             }),
+            SupervisionQuery::Query(LifecycleQuery::ReadinessStatus(_)) => {
+                SupervisionResponse::Ready(None)
+            }
+            SupervisionQuery::Query(LifecycleQuery::HealthStatus(_)) => {
+                SupervisionResponse::HealthReport(self.health.clone())
+            }
+            SupervisionQuery::Stop(_) => SupervisionResponse::StopAcknowledged(None),
         }
+    }
+}
+
+/// The bound supervision socket: one listener, serving each connection's
+/// lifecycle requests in order until the peer closes it.
+#[derive(Debug)]
+pub struct SupervisionListener {
+    profile: SupervisionProfile,
+    listener: UnixListener,
+    wire: SignalWire,
+}
+
+impl SupervisionListener {
+    /// Bind the supervision socket with its configured mode, replacing a stale
+    /// socket file left by an earlier process.
+    pub fn bind(profile: SupervisionProfile, socket: &Path, mode: u32) -> Result<Self> {
+        if let Some(parent) = socket.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let _ = std::fs::remove_file(socket);
+        let listener = UnixListener::bind(socket)?;
+        std::fs::set_permissions(socket, std::fs::Permissions::from_mode(mode))?;
+        Ok(Self {
+            profile,
+            listener,
+            wire: SignalWire::default(),
+        })
+    }
+
+    /// Serve every supervision connection until the runtime stops.
+    pub async fn serve(self) {
+        loop {
+            let Ok((stream, _address)) = self.listener.accept().await else {
+                continue;
+            };
+            let connection = SupervisionConnection {
+                profile: self.profile.clone(),
+                wire: self.wire,
+            };
+            let _connection = tokio::spawn(connection.serve(stream));
+        }
+    }
+}
+
+struct SupervisionConnection {
+    profile: SupervisionProfile,
+    wire: SignalWire,
+}
+
+impl SupervisionConnection {
+    async fn serve(self, mut stream: UnixStream) {
+        while let Ok(request) = self.wire.read_async::<SupervisionQuery>(&mut stream).await {
+            let reply = self.profile.reply(request);
+            if self.wire.write_async(&mut stream, &reply).await.is_err() {
+                return;
+            }
+        }
+    }
+}
+
+/// Where the supervision socket is bound, as the daemon configuration names it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SupervisionSocket {
+    path: PathBuf,
+    mode: u32,
+}
+
+impl SupervisionSocket {
+    pub fn new(path: impl Into<PathBuf>, mode: u32) -> Self {
+        Self {
+            path: path.into(),
+            mode,
+        }
+    }
+
+    pub fn bind(&self, profile: SupervisionProfile) -> Result<SupervisionListener> {
+        SupervisionListener::bind(profile, &self.path, self.mode)
     }
 }

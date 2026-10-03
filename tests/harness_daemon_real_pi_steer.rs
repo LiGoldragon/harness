@@ -21,7 +21,6 @@
 //! `PI_WRAPPER_INJECT_PROMPT` that starts the next natural turn so the queued
 //! steer is ingested by the model.
 
-use std::io::{Read, Write};
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -29,20 +28,13 @@ use std::process::{Child, Command};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use harness::HarnessDaemonConfigurationFile;
-use signal_frame::{
-    ExchangeIdentifier, ExchangeLane, LaneSequence, Reply, Request, SessionEpoch, SubReply,
-};
+use harness::{HarnessDaemonConfigurationFile, SignalWire};
 use signal_harness::{
-    DeliveryCompleted, HarnessDaemonConfiguration, HarnessEvent, HarnessFrame, HarnessFrameBody,
-    HarnessInstanceConfiguration, HarnessKind, HarnessName, HarnessRequest, MessageBody,
-    MessageDelivery, MessageSender, MessageSlot, PiRpcCommandPath, PiRpcDeliveryMode,
-    PiRpcJsonlAdapterConfiguration, PiRpcModelPattern, PiRpcSessionDirectoryPath,
+    DeliveryCompleted, HarnessDaemonConfiguration, HarnessInstanceConfiguration, HarnessKind,
+    HarnessName, MessageDelivery, PiRpcDeliveryMode, PiRpcJsonlAdapterConfiguration,
+    Query as HarnessRequest, Response as HarnessEvent,
 };
-use signal_persona::{
-    DomainSocketMode, DomainSocketPath, EngineManagementSocketMode, EngineManagementSocketPath,
-    OwnerIdentity, UnixUserIdentifier,
-};
+use signal_persona::OwnerIdentity;
 use tempfile::TempDir;
 
 const TARGET: &str = "operator";
@@ -64,21 +56,20 @@ fn harness_daemon_delivers_routed_body_to_real_pi_as_steer() {
     let mut stream = UnixStream::connect(fixture.harness_socket()).expect("client connects");
     write_working_request(
         &mut stream,
-        MessageDelivery {
-            harness: HarnessName::new(TARGET),
-            sender: MessageSender::new("router"),
-            body: MessageBody::new(MESSAGE_BODY),
-            message_slot: MessageSlot::new(1),
-        }
-        .into(),
+        HarnessRequest::MessageDelivery(MessageDelivery {
+            harness_name: HarnessName::from(TARGET),
+            message_sender: "router".into(),
+            message_body: MESSAGE_BODY.into(),
+            message_slot: 1,
+        }),
     );
     let event = read_working_event(&mut stream);
 
     assert_eq!(
         event,
         HarnessEvent::DeliveryCompleted(DeliveryCompleted {
-            harness: HarnessName::new(TARGET),
-            message_slot: MessageSlot::new(1),
+            harness_name: HarnessName::from(TARGET),
+            message_slot: 1,
         }),
         "the real pi did not acknowledge the steer with an RPC success"
     );
@@ -141,26 +132,25 @@ impl LivePiHarness {
     fn spawn(&self) -> SpawnedDaemon {
         let configuration_path = self.path().join("harness.rkyv");
         let configuration = HarnessDaemonConfiguration {
-            domain_socket_path: DomainSocketPath::new(self.harness_socket().display().to_string()),
-            domain_socket_mode: DomainSocketMode::new(0o600),
-            engine_management_socket_path: EngineManagementSocketPath::new(
-                self.supervision_socket().display().to_string(),
-            ),
-            engine_management_socket_mode: EngineManagementSocketMode::new(0o600),
-            owner_identity: OwnerIdentity::UnixUser(UnixUserIdentifier::new(
-                self.current_uid().into(),
-            )),
-            harnesses: vec![HarnessInstanceConfiguration {
-                harness_name: HarnessName::new(TARGET),
+            domain_socket_path: self.harness_socket().display().to_string(),
+            domain_socket_mode: 0o600,
+            meta_socket_path: self.path().join("meta-harness.sock").display().to_string(),
+            meta_socket_mode: 0o600,
+            engine_management_socket_path: self.supervision_socket().display().to_string(),
+            engine_management_socket_mode: 0o600,
+            owner_identity: OwnerIdentity::UnixUser(i64::from(self.current_uid())),
+            harness_instance_configurations: vec![HarnessInstanceConfiguration {
+                harness_name: HarnessName::from(TARGET),
                 harness_kind: HarnessKind::Pi,
-                terminal_socket_path: None,
-                pi_rpc_adapter: Some(PiRpcJsonlAdapterConfiguration {
-                    command_path: PiRpcCommandPath::new(self.tee_wrapper.display().to_string()),
-                    session_directory_path: PiRpcSessionDirectoryPath::new(
-                        self.pi_session_directory().display().to_string(),
-                    ),
-                    delivery_mode: PiRpcDeliveryMode::Steer,
-                    model_pattern: Some(PiRpcModelPattern::new(&self.model)),
+                terminal_socket_path_option: None,
+                pi_rpc_jsonl_adapter_configuration_option: Some(PiRpcJsonlAdapterConfiguration {
+                    pi_rpc_command_path: self.tee_wrapper.display().to_string(),
+                    pi_rpc_session_directory_path: self
+                        .pi_session_directory()
+                        .display()
+                        .to_string(),
+                    pi_rpc_model_pattern_option: Some(self.model.clone()),
+                    pi_rpc_delivery_mode: PiRpcDeliveryMode::Steer,
                 }),
             }],
         };
@@ -199,44 +189,15 @@ impl Drop for SpawnedDaemon {
 }
 
 fn write_working_request(stream: &mut UnixStream, request: HarnessRequest) {
-    let frame = HarnessFrame::new(HarnessFrameBody::Request {
-        exchange: test_exchange(),
-        request: Request::from_payload(request),
-    });
-    let body = frame.encode().expect("harness request encodes");
-    let length = u32::try_from(body.len()).expect("frame body fits a u32 length prefix");
-    stream
-        .write_all(&length.to_be_bytes())
-        .expect("length prefix writes");
-    stream.write_all(&body).expect("frame body writes");
-    stream.flush().expect("frame flushes");
+    SignalWire::default()
+        .write(stream, &request)
+        .expect("harness request writes");
 }
 
 fn read_working_event(stream: &mut UnixStream) -> HarnessEvent {
-    let mut prefix = [0_u8; 4];
-    stream.read_exact(&mut prefix).expect("event length reads");
-    let length = u32::from_be_bytes(prefix) as usize;
-    let mut body = vec![0_u8; length];
-    stream.read_exact(&mut body).expect("event body reads");
-    let frame = HarnessFrame::decode(&body).expect("event frame decodes");
-    match frame.into_body() {
-        HarnessFrameBody::Reply { reply, .. } => match reply {
-            Reply::Accepted { per_operation, .. } => match per_operation.into_head() {
-                SubReply::Ok(payload) => payload,
-                other => panic!("expected ok harness sub-reply, got {other:?}"),
-            },
-            Reply::Rejected { reason } => panic!("expected harness event reply, got {reason:?}"),
-        },
-        other => panic!("expected harness event reply, got {other:?}"),
-    }
-}
-
-fn test_exchange() -> ExchangeIdentifier {
-    ExchangeIdentifier::new(
-        SessionEpoch::new(0),
-        ExchangeLane::Connector,
-        LaneSequence::first(),
-    )
+    SignalWire::default()
+        .read(stream)
+        .expect("harness response reads")
 }
 
 fn wait_for_socket(socket: &Path) {

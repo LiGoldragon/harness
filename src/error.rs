@@ -8,7 +8,19 @@ pub enum Error {
     Io(#[from] std::io::Error),
 
     #[error("signal frame: {0}")]
-    SignalFrame(#[from] signal_frame::FrameError),
+    SignalFrame(#[from] signal::FrameError),
+
+    #[error("a signal frame did not restore into its contract root")]
+    UnreadableSignalFrame,
+
+    #[error("a contract value did not archive into a signal frame")]
+    UnarchivableSignalValue,
+
+    #[error("datom text: {detail}")]
+    DatomText { detail: String },
+
+    #[error("expected exactly one inline Datom argument, received {count}")]
+    ArgumentCount { count: usize },
 
     #[error("daemon transport frame: {0}")]
     TransportFrame(#[from] triad_runtime::FrameError),
@@ -19,22 +31,8 @@ pub enum Error {
     #[error("unexpected signal frame: {got}")]
     UnexpectedSignalFrame { got: String },
 
-    #[error("signal request failed structural checks: {reason}")]
-    InvalidSignalRequest {
-        reason: signal_frame::RequestRejectionReason,
-    },
-
     #[error("daemon argument: {0}")]
     Argument(#[from] triad_runtime::ArgumentError),
-
-    #[error("input file read failed at {path}: {source}")]
-    ReadNotaFile {
-        path: PathBuf,
-        source: std::io::Error,
-    },
-
-    #[error("nota decode: {0}")]
-    Nota(#[from] nota::NotaDecodeError),
 
     #[error("failed to read binary daemon configuration {path}: {source}")]
     ConfigurationRead {

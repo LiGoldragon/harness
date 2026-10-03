@@ -1,5 +1,29 @@
 # Upgrades
 
+## 0.6.0 — current contract family and the usage snapshot
+
+Breaking wire change. Client, daemon and every peer move together.
+
+- Every socket now speaks plain `signal` frames of exactly one contract
+  root: `signal-harness` 8.0.0 on the ordinary socket, `meta-signal-harness`
+  1.0.1 on a new owner-only meta socket, the `signal-persona` 4.0.0
+  engine-management lifecycle on the supervision socket. The `signal-frame`
+  exchange envelope is gone. A peer built against `signal-harness` 0.x
+  (the Router's harness delivery, any Persona manager) cannot talk to 0.6.0.
+- `HarnessDaemonConfiguration` gains `MetaSocketPath` and `MetaSocketMode`;
+  its fields are plain values named after their types. A configuration file
+  written by an older producer does not decode.
+- `harness` and `meta-harness` take one inline Datom value and print Datom;
+  NOTA arguments and `.nota` files are no longer read.
+- New `harness-usage` prints the human view of `UsageSnapshotQuery`; the
+  typed reply is `harness UsageSnapshotQuery`. The daemon answers it with an
+  empty instance set, from the daemon user's own `HOME`.
+- Transcript stream events arrive as `Response::HarnessTranscriptEvent`
+  carrying their subscription token.
+
+Deploy the CLI and the daemon from one package revision; restart any running
+`harness-daemon` with a configuration written for 0.6.0.
+
 ## Flow identity helper
 
 Install the Home generation that pins the `harness` revision carrying

@@ -2,15 +2,11 @@ use std::io::Write;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 
-use meta_signal_harness::{
-    MetaHarnessFrame, MetaHarnessFrameBody, MetaHarnessReply, MetaHarnessRequest,
-};
-use nota::{NotaEncode, NotaSource};
-use signal_frame::{ExchangeIdentifier, ExchangeLane, LaneSequence, Reply, SessionEpoch, SubReply};
-use triad_runtime::{ComponentCommand, FrameBody as RuntimeFrameBody, LengthPrefixedCodec};
+use meta_signal_harness::{Query, Response};
 
-use crate::cli_argument::NotaCommandText;
-use crate::{Error, Result};
+use crate::Result;
+use crate::cli_argument::{DatomArgument, DatomPrint};
+use crate::wire::SignalWire;
 
 const DEFAULT_META_HARNESS_SOCKET: &str = "/tmp/meta-harness.sock";
 
@@ -31,79 +27,40 @@ impl MetaHarnessEndpoint {
     }
 }
 
+/// The `meta-signal-harness` client: one meta `Query` frame out, one meta
+/// `Response` frame back, over the daemon's meta socket.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MetaHarnessClient {
     endpoint: MetaHarnessEndpoint,
-    codec: LengthPrefixedCodec,
+    wire: SignalWire,
 }
 
 impl MetaHarnessClient {
     pub fn new(endpoint: MetaHarnessEndpoint) -> Self {
         Self {
             endpoint,
-            codec: LengthPrefixedCodec::default(),
+            wire: SignalWire::default(),
         }
     }
 
-    pub fn submit(&self, request: MetaHarnessRequest) -> Result<MetaHarnessReply> {
-        let exchange = self.exchange();
-        let frame = MetaHarnessFrame::new(MetaHarnessFrameBody::Request {
-            exchange,
-            request: signal_frame::Request::from_payload(request),
-        });
+    pub fn submit(&self, query: Query) -> Result<Response> {
         let mut stream = UnixStream::connect(self.endpoint.as_path())?;
-        self.codec
-            .write_body(&mut stream, &RuntimeFrameBody::new(frame.encode()?))?;
-        let body = self.codec.read_body(&mut stream)?;
-        self.reply_from_frame(MetaHarnessFrame::decode(body.bytes())?)
-    }
-
-    fn exchange(&self) -> ExchangeIdentifier {
-        let _endpoint = &self.endpoint;
-        ExchangeIdentifier::new(
-            SessionEpoch::new(0),
-            ExchangeLane::Connector,
-            LaneSequence::first(),
-        )
-    }
-
-    fn reply_from_frame(&self, frame: MetaHarnessFrame) -> Result<MetaHarnessReply> {
-        match frame.into_body() {
-            MetaHarnessFrameBody::Reply { reply, .. } => self.reply_output(reply),
-            other => Err(Error::UnexpectedSignalFrame {
-                got: format!("{other:?}"),
-            }),
-        }
-    }
-
-    fn reply_output(&self, reply: Reply<MetaHarnessReply>) -> Result<MetaHarnessReply> {
-        let _endpoint = &self.endpoint;
-        match reply {
-            Reply::Accepted { per_operation, .. } => match per_operation.into_head() {
-                SubReply::Ok(payload) => Ok(payload),
-                other => Err(Error::UnexpectedSignalFrame {
-                    got: format!("{other:?}"),
-                }),
-            },
-            Reply::Rejected { reason } => Err(Error::UnexpectedSignalFrame {
-                got: reason.to_string(),
-            }),
-        }
+        self.wire.write(&mut stream, &query)?;
+        self.wire.read(&mut stream)
     }
 }
 
+/// `meta-harness '<Datom meta Query>'`: one inline Datom meta `Query`, one
+/// Datom meta `Response` printed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MetaHarnessCommandLine {
-    command: ComponentCommand,
+    arguments: Vec<String>,
     environment: MetaHarnessCommandEnvironment,
 }
 
 impl MetaHarnessCommandLine {
     pub fn from_env() -> Self {
-        Self {
-            command: ComponentCommand::from_environment(),
-            environment: MetaHarnessCommandEnvironment::from_process(),
-        }
+        Self::from_arguments(std::env::args().skip(1))
     }
 
     pub fn from_arguments<Arguments, Argument>(arguments: Arguments) -> Self
@@ -126,15 +83,15 @@ impl MetaHarnessCommandLine {
         Argument: Into<String>,
     {
         Self {
-            command: ComponentCommand::from_arguments(arguments),
+            arguments: arguments.into_iter().map(Into::into).collect(),
             environment,
         }
     }
 
     pub fn run(self, mut output: impl Write) -> Result<()> {
-        let request = MetaHarnessRequestText::from_command(self.command)?.into_request()?;
-        let reply = MetaHarnessClient::new(self.environment.endpoint()).submit(request)?;
-        writeln!(output, "{}", reply.to_nota())?;
+        let query: Query = DatomArgument::from_arguments(self.arguments)?.actualize()?;
+        let response = MetaHarnessClient::new(self.environment.endpoint()).submit(query)?;
+        writeln!(output, "{}", DatomPrint::of(&response).as_str())?;
         Ok(())
     }
 }
@@ -159,22 +116,5 @@ impl MetaHarnessCommandEnvironment {
 
     pub fn endpoint(&self) -> MetaHarnessEndpoint {
         MetaHarnessEndpoint::new(&self.socket)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct MetaHarnessRequestText {
-    text: NotaCommandText,
-}
-
-impl MetaHarnessRequestText {
-    fn from_command(command: ComponentCommand) -> Result<Self> {
-        Ok(Self {
-            text: NotaCommandText::from_command(command)?,
-        })
-    }
-
-    fn into_request(self) -> Result<MetaHarnessRequest> {
-        Ok(NotaSource::new(self.text.as_str()).parse::<MetaHarnessRequest>()?)
     }
 }

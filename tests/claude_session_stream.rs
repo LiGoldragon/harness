@@ -17,28 +17,25 @@ use harness::{
 };
 use kameo::actor::{ActorRef, Spawn};
 use signal_harness::{
-    AssistantResponseText, ClaudeModel, ClaudeSessionIdentifier, ClaudeSessionLifecycle,
-    ClaudeSessionObservation, HarnessName, HarnessStreamEvent, StatusTransitionCount,
-    StreamedEventCount, ToolCallCount, TranscriptPath, TurnLaunch,
+    ClaudeSessionLifecycle, ClaudeSessionObservation, HarnessName, HarnessStreamEvent, TurnLaunch,
 };
-use signal_persona::TimestampNanos;
 use tokio::sync::mpsc::error::TryRecvError;
 
 fn session_observation(harness: &str) -> ClaudeSessionObservation {
     ClaudeSessionObservation {
-        harness: HarnessName::new(harness),
-        session_identifier: Some(ClaudeSessionIdentifier::new("session-alpha")),
-        model: Some(ClaudeModel::new("claude-3-5-haiku-latest")),
-        launch: TurnLaunch::Fresh,
+        harness_name: HarnessName::from(harness),
+        claude_session_identifier_option: Some("session-alpha".into()),
+        claude_model_option: Some("claude-3-5-haiku-latest".into()),
+        turn_launch: TurnLaunch::Fresh,
         reached_end_of_turn: true,
-        streamed_event_count: StreamedEventCount::new(9),
-        tool_call_count: ToolCallCount::new(2),
-        status_transition_count: StatusTransitionCount::new(4),
-        transcript_path: Some(TranscriptPath::new("/tmp/session-alpha.jsonl")),
-        response: Some(AssistantResponseText::new("FINAL_MARKER done")),
-        accumulated_context: None,
-        last_activity: TimestampNanos::new(1),
-        lifecycle: ClaudeSessionLifecycle::Completed,
+        streamed_event_count: 9,
+        tool_call_count: 2,
+        status_transition_count: 4,
+        transcript_path_option: Some("/tmp/session-alpha.jsonl".into()),
+        assistant_response_text_option: Some("FINAL_MARKER done".into()),
+        context_tokens_option: None,
+        timestamp_nanoseconds: 1,
+        claude_session_lifecycle: ClaudeSessionLifecycle::Completed,
     }
 }
 
@@ -76,13 +73,15 @@ async fn claude_session_observation_is_pushed_to_subscriber_without_polling() {
     let opened = fixture
         .manager
         .ask(OpenTranscriptSubscription {
-            harness: HarnessName::new("designer-session-1"),
+            harness: HarnessName::from("designer-session-1"),
             sink,
         })
         .await
         .expect("manager accepts open");
     match receiver.recv().await.expect("snapshot pushed on connect") {
-        TranscriptDeliveryEvent::Snapshot(snapshot) => assert_eq!(snapshot.token, opened.token),
+        TranscriptDeliveryEvent::Snapshot(snapshot) => {
+            assert_eq!(snapshot.harness_transcript_token, opened.token)
+        }
         other => panic!("expected snapshot, got {other:?}"),
     }
 
@@ -95,7 +94,7 @@ async fn claude_session_observation_is_pushed_to_subscriber_without_polling() {
     let receipt = fixture
         .publisher
         .ask(PublishStreamEvent {
-            event: observation.clone().into(),
+            event: HarnessStreamEvent::ClaudeSessionObservation(observation.clone()),
         })
         .await
         .expect("publish claude session observation");
@@ -108,11 +107,11 @@ async fn claude_session_observation_is_pushed_to_subscriber_without_polling() {
         TranscriptDeliveryEvent::Delta(HarnessStreamEvent::ClaudeSessionObservation(pushed)) => {
             assert_eq!(pushed, observation);
             assert_eq!(
-                pushed.response.as_ref().map(|text| text.as_str()),
+                pushed.assistant_response_text_option.as_deref(),
                 Some("FINAL_MARKER done")
             );
             // The deferred field crosses the wire as absent, never synthesized.
-            assert_eq!(pushed.accumulated_context, None);
+            assert_eq!(pushed.context_tokens_option, None);
         }
         other => panic!("expected ClaudeSessionObservation delta, got {other:?}"),
     }
@@ -133,7 +132,7 @@ async fn claude_session_observation_fans_out_to_every_open_subscriber() {
     fixture
         .manager
         .ask(OpenTranscriptSubscription {
-            harness: HarnessName::new("view-a"),
+            harness: HarnessName::from("view-a"),
             sink: TranscriptSubscriptionSink::channel(first_sender),
         })
         .await
@@ -141,7 +140,7 @@ async fn claude_session_observation_fans_out_to_every_open_subscriber() {
     fixture
         .manager
         .ask(OpenTranscriptSubscription {
-            harness: HarnessName::new("view-b"),
+            harness: HarnessName::from("view-b"),
             sink: TranscriptSubscriptionSink::channel(second_sender),
         })
         .await
@@ -155,7 +154,7 @@ async fn claude_session_observation_fans_out_to_every_open_subscriber() {
     let receipt = fixture
         .publisher
         .ask(PublishStreamEvent {
-            event: observation.clone().into(),
+            event: HarnessStreamEvent::ClaudeSessionObservation(observation.clone()),
         })
         .await
         .expect("publish");

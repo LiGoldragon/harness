@@ -20,41 +20,31 @@ use std::sync::mpsc::{Receiver, channel};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use harness::{HarnessDaemonConfigurationFile, HarnessEngine};
+use harness::{HarnessDaemonConfigurationFile, HarnessEngine, SignalWire};
 use meta_signal_harness::{
-    MetaHarnessFrame, MetaHarnessFrameBody, MetaHarnessReply, MetaHarnessRequest,
-    RequestUnimplemented as MetaRequestUnimplemented,
+    MetaOperationKind, Query as MetaHarnessRequest,
+    RequestUnimplemented as MetaRequestUnimplemented, Response as MetaHarnessReply,
     UnimplementedReason as MetaUnimplementedReason,
-};
-use signal_frame::{
-    ExchangeIdentifier, ExchangeLane, LaneSequence, Reply, Request, SessionEpoch, SubReply,
-    SubscriptionTokenInner,
 };
 use signal_harness::{
     CapabilityProfile, ClaudeSessionIdentifier, ContinuationHandle, ContinuationRequest,
     DeliveryCompleted, DeliveryFailed, DeliveryFailureReason, EffortRequest,
-    HarnessDaemonConfiguration, HarnessEvent, HarnessFrame, HarnessFrameBody, HarnessHealth,
-    HarnessInstanceConfiguration, HarnessKind as ContractHarnessKind, HarnessName,
-    HarnessOperationKind, HarnessReadiness, HarnessRequest, HarnessRequestUnimplemented,
-    HarnessStatus, HarnessStatusQuery, HarnessStreamEvent, HarnessTranscriptSequence,
-    HarnessTranscriptToken, HarnessUnimplementedReason, InteractionPrompt, MessageBody,
-    MessageDelivery, MessageSender, MessageSlot, ModelRequest, ModelResolutionRequest,
-    ModelResolved, ModelSelector, ModelUnavailable, ModelUnavailableReason, NamedModel,
-    PiContinuationIdentifier, PiRpcCommandPath, PiRpcSessionDirectoryPath, TerminalSocketPath,
-    TranscriptObservation, WatchHarnessTranscript,
+    HarnessDaemonConfiguration, HarnessHealth, HarnessInstanceConfiguration,
+    HarnessKind as ContractHarnessKind, HarnessName, HarnessOperationKind, HarnessReadiness,
+    HarnessRequestUnimplemented, HarnessStatus, HarnessStatusQuery, HarnessStreamEvent,
+    HarnessTranscriptToken, HarnessUnimplementedReason, InteractionPrompt, MessageDelivery,
+    ModelRequest, ModelResolutionRequest, ModelResolved, ModelSelector, ModelUnavailable,
+    ModelUnavailableReason, NamedModel, PiContinuationIdentifier, Query as HarnessRequest,
+    Response as HarnessEvent, TranscriptObservation, WatchHarnessTranscript,
 };
 use signal_persona::{
-    ComponentHealth, ComponentKind, ComponentName, DomainSocketMode, DomainSocketPath,
-    EngineManagementProtocolVersion, EngineManagementSocketMode, EngineManagementSocketPath,
-    Frame as SupervisionFrame, FrameBody as SupervisionFrameBody, Operation as SupervisionRequest,
-    OwnerIdentity, Presence, Query as SupervisionQuery, Reply as SupervisionReply,
-    UnixUserIdentifier,
+    ComponentHealth, ComponentKind, LifecycleQuery, OwnerIdentity, Presence,
+    Query as SupervisionRequest, Response as SupervisionReply,
 };
 use signal_terminal::{
     ByteViewable, Query as TerminalInputRoot, Response as TerminalOutput, Restorable, Signal,
     Signalizable, TerminalInputAcceptedReply,
 };
-use triad_runtime::{FrameBody as LengthPrefixedFrameBody, LengthPrefixedCodec};
 
 const MAXIMUM_FRAME_BYTES: usize = 1024 * 1024;
 
@@ -81,6 +71,10 @@ impl SocketFixture {
 
     fn supervision_socket(&self) -> PathBuf {
         self.root.join("harness-supervision.sock")
+    }
+
+    fn meta_socket(&self) -> PathBuf {
+        self.root.join("meta-harness.sock")
     }
 }
 
@@ -307,13 +301,12 @@ fn harness_daemon_binds_working_socket_with_configured_mode() {
     assert_eq!(mode, 0o600);
 }
 
-/// The working socket mode flows from the configured spawn envelope, while the
-/// owner-only supervision (meta) socket is owner-only by the daemon shape — the
-/// emitted shell binds the meta tier at a compile-time `0o600` regardless of the
-/// configured supervision mode. Uses a distinctive non-default working mode
-/// (`0o640`) so a regression that pins the working chmod to a fixed value fails.
+/// The working and supervision socket modes flow from the configuration,
+/// while the meta socket is owner-only by the daemon shape — the emitted shell
+/// binds the meta tier at a compile-time `0o600`. Distinctive non-default modes
+/// (`0o640`, `0o660`) make a regression that pins either chmod fail.
 #[test]
-fn harness_daemon_applies_configured_working_socket_mode_and_owner_only_supervision() {
+fn harness_daemon_applies_configured_socket_modes_and_owner_only_meta() {
     let fixture = SocketFixture::new("distinctive-socket-modes");
     let supervision_socket = fixture.supervision_socket();
     let configuration_path = fixture.root.join("harness-daemon.rkyv");
@@ -328,6 +321,7 @@ fn harness_daemon_applies_configured_working_socket_mode_and_owner_only_supervis
 
     wait_for_socket(fixture.socket());
     wait_for_socket(&supervision_socket);
+    wait_for_socket(&fixture.meta_socket());
 
     assert_eq!(
         socket_mode(fixture.socket()),
@@ -336,8 +330,13 @@ fn harness_daemon_applies_configured_working_socket_mode_and_owner_only_supervis
     );
     assert_eq!(
         socket_mode(&supervision_socket),
+        0o660,
+        "supervision socket mode did not pick up the configuration socket mode",
+    );
+    assert_eq!(
+        socket_mode(&fixture.meta_socket()),
         0o600,
-        "supervision socket is owner-only by the daemon shape, not the config",
+        "meta socket is owner-only by the daemon shape",
     );
 }
 
@@ -360,21 +359,20 @@ fn harness_daemon_delivers_message_to_terminal_endpoint() {
     let mut stream = UnixStream::connect(fixture.socket()).expect("client connects");
     write_working_request(
         &mut stream,
-        MessageDelivery {
-            harness: HarnessName::new("operator"),
-            sender: MessageSender::new("router"),
-            body: MessageBody::new("deliver through harness daemon"),
-            message_slot: MessageSlot::new(7),
-        }
-        .into(),
+        HarnessRequest::MessageDelivery(MessageDelivery {
+            harness_name: HarnessName::from("operator"),
+            message_sender: "router".into(),
+            message_body: "deliver through harness daemon".into(),
+            message_slot: 7,
+        }),
     );
     let event = read_working_event(&mut stream);
 
     assert_eq!(
         event,
         HarnessEvent::DeliveryCompleted(DeliveryCompleted {
-            harness: HarnessName::new("operator"),
-            message_slot: MessageSlot::new(7),
+            harness_name: HarnessName::from("operator"),
+            message_slot: 7,
         })
     );
     assert!(
@@ -407,41 +405,39 @@ fn harness_daemon_dispatches_two_harness_instances_inside_one_process() {
     let mut operator_stream = UnixStream::connect(fixture.socket()).expect("operator connects");
     write_working_request(
         &mut operator_stream,
-        MessageDelivery {
-            harness: HarnessName::new("operator"),
-            sender: MessageSender::new("router"),
-            body: MessageBody::new("operator message"),
-            message_slot: MessageSlot::new(11),
-        }
-        .into(),
+        HarnessRequest::MessageDelivery(MessageDelivery {
+            harness_name: HarnessName::from("operator"),
+            message_sender: "router".into(),
+            message_body: "operator message".into(),
+            message_slot: 11,
+        }),
     );
     let operator_event = read_working_event(&mut operator_stream);
 
     let mut designer_stream = UnixStream::connect(fixture.socket()).expect("designer connects");
     write_working_request(
         &mut designer_stream,
-        MessageDelivery {
-            harness: HarnessName::new("designer"),
-            sender: MessageSender::new("router"),
-            body: MessageBody::new("designer message"),
-            message_slot: MessageSlot::new(12),
-        }
-        .into(),
+        HarnessRequest::MessageDelivery(MessageDelivery {
+            harness_name: HarnessName::from("designer"),
+            message_sender: "router".into(),
+            message_body: "designer message".into(),
+            message_slot: 12,
+        }),
     );
     let designer_event = read_working_event(&mut designer_stream);
 
     assert_eq!(
         operator_event,
         HarnessEvent::DeliveryCompleted(DeliveryCompleted {
-            harness: HarnessName::new("operator"),
-            message_slot: MessageSlot::new(11),
+            harness_name: HarnessName::from("operator"),
+            message_slot: 11,
         })
     );
     assert_eq!(
         designer_event,
         HarnessEvent::DeliveryCompleted(DeliveryCompleted {
-            harness: HarnessName::new("designer"),
-            message_slot: MessageSlot::new(12),
+            harness_name: HarnessName::from("designer"),
+            message_slot: 12,
         })
     );
     assert!(
@@ -475,21 +471,20 @@ fn harness_daemon_delivers_message_to_pi_rpc_endpoint() {
     let mut stream = UnixStream::connect(fixture.socket()).expect("client connects");
     write_working_request(
         &mut stream,
-        MessageDelivery {
-            harness: HarnessName::new("operator"),
-            sender: MessageSender::new("router"),
-            body: MessageBody::new("deliver through pi rpc"),
-            message_slot: MessageSlot::new(9),
-        }
-        .into(),
+        HarnessRequest::MessageDelivery(MessageDelivery {
+            harness_name: HarnessName::from("operator"),
+            message_sender: "router".into(),
+            message_body: "deliver through pi rpc".into(),
+            message_slot: 9,
+        }),
     );
     let event = read_working_event(&mut stream);
 
     assert_eq!(
         event,
         HarnessEvent::DeliveryCompleted(DeliveryCompleted {
-            harness: HarnessName::new("operator"),
-            message_slot: MessageSlot::new(9),
+            harness_name: HarnessName::from("operator"),
+            message_slot: 9,
         })
     );
 
@@ -522,22 +517,21 @@ fn harness_daemon_rejects_message_delivery_without_terminal_endpoint() {
     let mut stream = UnixStream::connect(fixture.socket()).expect("client connects");
     write_working_request(
         &mut stream,
-        MessageDelivery {
-            harness: HarnessName::new("operator"),
-            sender: MessageSender::new("router"),
-            body: MessageBody::new("cannot deliver without terminal"),
-            message_slot: MessageSlot::new(8),
-        }
-        .into(),
+        HarnessRequest::MessageDelivery(MessageDelivery {
+            harness_name: HarnessName::from("operator"),
+            message_sender: "router".into(),
+            message_body: "cannot deliver without terminal".into(),
+            message_slot: 8,
+        }),
     );
     let event = read_working_event(&mut stream);
 
     assert_eq!(
         event,
         HarnessEvent::DeliveryFailed(DeliveryFailed {
-            harness: HarnessName::new("operator"),
-            message_slot: MessageSlot::new(8),
-            reason: DeliveryFailureReason::TransportRejected,
+            harness_name: HarnessName::from("operator"),
+            message_slot: 8,
+            delivery_failure_reason: DeliveryFailureReason::TransportRejected,
         })
     );
 }
@@ -556,19 +550,18 @@ fn harness_daemon_answers_status_readiness() {
     let mut stream = UnixStream::connect(fixture.socket()).expect("client connects");
     write_working_request(
         &mut stream,
-        HarnessStatusQuery {
-            harness: HarnessName::new("operator"),
-        }
-        .into(),
+        HarnessRequest::HarnessStatusQuery(HarnessStatusQuery {
+            harness_name: HarnessName::from("operator"),
+        }),
     );
     let event = read_working_event(&mut stream);
 
     assert_eq!(
         event,
         HarnessEvent::HarnessStatus(HarnessStatus {
-            harness: HarnessName::new("operator"),
-            health: HarnessHealth::Running,
-            readiness: HarnessReadiness::Ready,
+            harness_name: HarnessName::from("operator"),
+            harness_health: HarnessHealth::Running,
+            harness_readiness: HarnessReadiness::Ready,
         })
     );
 }
@@ -587,18 +580,25 @@ fn harness_daemon_watch_transcript_returns_typed_snapshot() {
     let mut stream = UnixStream::connect(fixture.socket()).expect("client connects");
     write_working_request(
         &mut stream,
-        WatchHarnessTranscript {
-            harness: HarnessName::new("operator"),
-        }
-        .into(),
+        HarnessRequest::WatchHarnessTranscript(WatchHarnessTranscript {
+            harness_name: HarnessName::from("operator"),
+        }),
     );
     let event = read_working_event(&mut stream);
 
     match event {
         HarnessEvent::HarnessTranscriptSnapshot(snapshot) => {
-            assert_eq!(snapshot.token.harness, HarnessName::new("operator"));
-            assert_eq!(snapshot.token.subscription.into_u64(), 1);
-            assert_eq!(snapshot.current_sequence.into_u64(), 0);
+            assert_eq!(
+                snapshot.harness_transcript_token.harness_name,
+                HarnessName::from("operator")
+            );
+            assert_eq!(
+                snapshot
+                    .harness_transcript_token
+                    .harness_transcript_subscription_identifier,
+                1
+            );
+            assert_eq!(snapshot.harness_transcript_sequence, 0);
         }
         other => panic!("expected transcript snapshot, got {other:?}"),
     }
@@ -618,20 +618,22 @@ fn harness_daemon_unwatch_transcript_returns_final_retraction_ack_on_subscribed_
     let mut watch_stream = UnixStream::connect(fixture.socket()).expect("watch client connects");
     write_working_request(
         &mut watch_stream,
-        WatchHarnessTranscript {
-            harness: HarnessName::new("operator"),
-        }
-        .into(),
+        HarnessRequest::WatchHarnessTranscript(WatchHarnessTranscript {
+            harness_name: HarnessName::from("operator"),
+        }),
     );
     let token = transcript_snapshot_token(read_working_event(&mut watch_stream));
 
-    write_working_request(&mut watch_stream, token.clone().into());
+    write_working_request(
+        &mut watch_stream,
+        HarnessRequest::UnwatchHarnessTranscript(token.clone()),
+    );
     let event = read_working_event(&mut watch_stream);
 
     assert_eq!(
         event,
         HarnessEvent::HarnessSubscriptionRetracted(signal_harness::HarnessSubscriptionRetracted {
-            token
+            harness_transcript_token: token
         })
     );
 }
@@ -654,19 +656,18 @@ async fn harness_daemon_watch_transcript_stream_delivers_published_observation_a
 
     write_working_request_async(
         &mut client_stream,
-        WatchHarnessTranscript {
-            harness: HarnessName::new("operator"),
-        }
-        .into(),
+        HarnessRequest::WatchHarnessTranscript(WatchHarnessTranscript {
+            harness_name: HarnessName::from("operator"),
+        }),
     )
     .await;
     let token = transcript_snapshot_token(read_working_event_async(&mut client_stream).await);
 
     let receipt = engine
         .publish_transcript_observation(TranscriptObservation {
-            harness: HarnessName::new("operator"),
-            sequence: HarnessTranscriptSequence::new(1),
-            line: "ready".to_string(),
+            harness_name: HarnessName::from("operator"),
+            harness_transcript_sequence: 1,
+            transcript_line: "ready".to_string(),
         })
         .await
         .expect("publish transcript observation");
@@ -677,18 +678,22 @@ async fn harness_daemon_watch_transcript_stream_delivers_published_observation_a
     assert_eq!(
         event,
         HarnessStreamEvent::TranscriptObservation(TranscriptObservation {
-            harness: HarnessName::new("operator"),
-            sequence: HarnessTranscriptSequence::new(1),
-            line: "ready".to_string(),
+            harness_name: HarnessName::from("operator"),
+            harness_transcript_sequence: 1,
+            transcript_line: "ready".to_string(),
         })
     );
 
-    write_working_request_async(&mut client_stream, token.clone().into()).await;
+    write_working_request_async(
+        &mut client_stream,
+        HarnessRequest::UnwatchHarnessTranscript(token.clone()),
+    )
+    .await;
     let final_ack = read_working_event_async(&mut client_stream).await;
     assert_eq!(
         final_ack,
         HarnessEvent::HarnessSubscriptionRetracted(signal_harness::HarnessSubscriptionRetracted {
-            token
+            harness_transcript_token: token
         })
     );
 
@@ -713,33 +718,31 @@ async fn harness_daemon_allows_nested_watchers_for_same_harness_without_cross_cl
 
     write_working_request_async(
         &mut client_stream,
-        WatchHarnessTranscript {
-            harness: HarnessName::new("operator"),
-        }
-        .into(),
+        HarnessRequest::WatchHarnessTranscript(WatchHarnessTranscript {
+            harness_name: HarnessName::from("operator"),
+        }),
     )
     .await;
     let first_token = transcript_snapshot_token(read_working_event_async(&mut client_stream).await);
 
     write_working_request_async(
         &mut client_stream,
-        WatchHarnessTranscript {
-            harness: HarnessName::new("operator"),
-        }
-        .into(),
+        HarnessRequest::WatchHarnessTranscript(WatchHarnessTranscript {
+            harness_name: HarnessName::from("operator"),
+        }),
     )
     .await;
     let second_token =
         transcript_snapshot_token(read_working_event_async(&mut client_stream).await);
-    assert_eq!(first_token.harness, HarnessName::new("operator"));
-    assert_eq!(second_token.harness, HarnessName::new("operator"));
+    assert_eq!(first_token.harness_name, HarnessName::from("operator"));
+    assert_eq!(second_token.harness_name, HarnessName::from("operator"));
     assert_ne!(first_token, second_token);
 
     let receipt = engine
         .publish_transcript_observation(TranscriptObservation {
-            harness: HarnessName::new("operator"),
-            sequence: HarnessTranscriptSequence::new(1),
-            line: "first".to_string(),
+            harness_name: HarnessName::from("operator"),
+            harness_transcript_sequence: 1,
+            transcript_line: "first".to_string(),
         })
         .await
         .expect("publish transcript observation");
@@ -752,42 +755,42 @@ async fn harness_daemon_allows_nested_watchers_for_same_harness_without_cross_cl
     let first_delivery = read_working_stream_frame_async(&mut client_stream).await;
     let second_delivery = read_working_stream_frame_async(&mut client_stream).await;
     let delivered_tokens = [first_delivery.token, second_delivery.token];
-    assert!(delivered_tokens.contains(&SubscriptionTokenInner::new(
-        first_token.subscription.into_u64()
-    )));
-    assert!(delivered_tokens.contains(&SubscriptionTokenInner::new(
-        second_token.subscription.into_u64()
-    )));
+    assert!(delivered_tokens.contains(&first_token.clone()));
+    assert!(delivered_tokens.contains(&second_token.clone()));
     assert_eq!(
         first_delivery.event,
         HarnessStreamEvent::TranscriptObservation(TranscriptObservation {
-            harness: HarnessName::new("operator"),
-            sequence: HarnessTranscriptSequence::new(1),
-            line: "first".to_string(),
+            harness_name: HarnessName::from("operator"),
+            harness_transcript_sequence: 1,
+            transcript_line: "first".to_string(),
         })
     );
     assert_eq!(
         second_delivery.event,
         HarnessStreamEvent::TranscriptObservation(TranscriptObservation {
-            harness: HarnessName::new("operator"),
-            sequence: HarnessTranscriptSequence::new(1),
-            line: "first".to_string(),
+            harness_name: HarnessName::from("operator"),
+            harness_transcript_sequence: 1,
+            transcript_line: "first".to_string(),
         })
     );
 
-    write_working_request_async(&mut client_stream, first_token.clone().into()).await;
+    write_working_request_async(
+        &mut client_stream,
+        HarnessRequest::UnwatchHarnessTranscript(first_token.clone()),
+    )
+    .await;
     assert_eq!(
         read_working_event_async(&mut client_stream).await,
         HarnessEvent::HarnessSubscriptionRetracted(signal_harness::HarnessSubscriptionRetracted {
-            token: first_token.clone(),
+            harness_transcript_token: first_token.clone(),
         })
     );
 
     let receipt = engine
         .publish_transcript_observation(TranscriptObservation {
-            harness: HarnessName::new("operator"),
-            sequence: HarnessTranscriptSequence::new(2),
-            line: "second-only".to_string(),
+            harness_name: HarnessName::from("operator"),
+            harness_transcript_sequence: 2,
+            transcript_line: "second-only".to_string(),
         })
         .await
         .expect("publish after first close");
@@ -797,33 +800,34 @@ async fn harness_daemon_allows_nested_watchers_for_same_harness_without_cross_cl
         "closing the first watcher must not close the second"
     );
     let remaining_delivery = read_working_stream_frame_async(&mut client_stream).await;
-    assert_eq!(
-        remaining_delivery.token,
-        SubscriptionTokenInner::new(second_token.subscription.into_u64())
-    );
+    assert_eq!(remaining_delivery.token, second_token.clone());
     assert_eq!(
         remaining_delivery.event,
         HarnessStreamEvent::TranscriptObservation(TranscriptObservation {
-            harness: HarnessName::new("operator"),
-            sequence: HarnessTranscriptSequence::new(2),
-            line: "second-only".to_string(),
+            harness_name: HarnessName::from("operator"),
+            harness_transcript_sequence: 2,
+            transcript_line: "second-only".to_string(),
         })
     );
 
-    write_working_request_async(&mut client_stream, second_token.clone().into()).await;
+    write_working_request_async(
+        &mut client_stream,
+        HarnessRequest::UnwatchHarnessTranscript(second_token.clone()),
+    )
+    .await;
     assert_eq!(
         read_working_event_async(&mut client_stream).await,
         HarnessEvent::HarnessSubscriptionRetracted(signal_harness::HarnessSubscriptionRetracted {
-            token: second_token.clone(),
+            harness_transcript_token: second_token.clone(),
         })
     );
     server.await.expect("server task joins");
 
     let receipt = engine
         .publish_transcript_observation(TranscriptObservation {
-            harness: HarnessName::new("operator"),
-            sequence: HarnessTranscriptSequence::new(3),
-            line: "after-close".to_string(),
+            harness_name: HarnessName::from("operator"),
+            harness_transcript_sequence: 3,
+            transcript_line: "after-close".to_string(),
         })
         .await
         .expect("publish after both close");
@@ -851,10 +855,9 @@ async fn harness_daemon_rejects_cross_harness_nested_watch_without_leaking_subsc
 
     write_working_request_async(
         &mut client_stream,
-        WatchHarnessTranscript {
-            harness: HarnessName::new("operator"),
-        }
-        .into(),
+        HarnessRequest::WatchHarnessTranscript(WatchHarnessTranscript {
+            harness_name: HarnessName::from("operator"),
+        }),
     )
     .await;
     let operator_token =
@@ -862,26 +865,25 @@ async fn harness_daemon_rejects_cross_harness_nested_watch_without_leaking_subsc
 
     write_working_request_async(
         &mut client_stream,
-        WatchHarnessTranscript {
-            harness: HarnessName::new("designer"),
-        }
-        .into(),
+        HarnessRequest::WatchHarnessTranscript(WatchHarnessTranscript {
+            harness_name: HarnessName::from("designer"),
+        }),
     )
     .await;
     assert_eq!(
         read_working_event_async(&mut client_stream).await,
         HarnessEvent::HarnessRequestUnimplemented(HarnessRequestUnimplemented {
-            harness: HarnessName::new("designer"),
-            operation: HarnessOperationKind::WatchHarnessTranscript,
-            reason: HarnessUnimplementedReason::NotBuiltYet,
+            harness_name: HarnessName::from("designer"),
+            harness_operation_kind: HarnessOperationKind::WatchTranscript,
+            harness_unimplemented_reason: HarnessUnimplementedReason::NotBuiltYet,
         })
     );
 
     let operator_receipt = engine
         .publish_transcript_observation(TranscriptObservation {
-            harness: HarnessName::new("operator"),
-            sequence: HarnessTranscriptSequence::new(1),
-            line: "operator-only".to_string(),
+            harness_name: HarnessName::from("operator"),
+            harness_transcript_sequence: 1,
+            transcript_line: "operator-only".to_string(),
         })
         .await
         .expect("publish operator transcript observation");
@@ -895,17 +897,17 @@ async fn harness_daemon_rejects_cross_harness_nested_watch_without_leaking_subsc
     assert_eq!(
         event,
         HarnessStreamEvent::TranscriptObservation(TranscriptObservation {
-            harness: HarnessName::new("operator"),
-            sequence: HarnessTranscriptSequence::new(1),
-            line: "operator-only".to_string(),
+            harness_name: HarnessName::from("operator"),
+            harness_transcript_sequence: 1,
+            transcript_line: "operator-only".to_string(),
         })
     );
 
     let designer_receipt = engine
         .publish_transcript_observation(TranscriptObservation {
-            harness: HarnessName::new("designer"),
-            sequence: HarnessTranscriptSequence::new(1),
-            line: "designer-not-subscribed".to_string(),
+            harness_name: HarnessName::from("designer"),
+            harness_transcript_sequence: 1,
+            transcript_line: "designer-not-subscribed".to_string(),
         })
         .await
         .expect("publish designer transcript observation");
@@ -915,11 +917,15 @@ async fn harness_daemon_rejects_cross_harness_nested_watch_without_leaking_subsc
         "rejected cross-harness watch must not subscribe the requested harness either"
     );
 
-    write_working_request_async(&mut client_stream, operator_token.clone().into()).await;
+    write_working_request_async(
+        &mut client_stream,
+        HarnessRequest::UnwatchHarnessTranscript(operator_token.clone()),
+    )
+    .await;
     assert_eq!(
         read_working_event_async(&mut client_stream).await,
         HarnessEvent::HarnessSubscriptionRetracted(signal_harness::HarnessSubscriptionRetracted {
-            token: operator_token,
+            harness_transcript_token: operator_token,
         })
     );
     server.await.expect("server task joins");
@@ -939,22 +945,21 @@ fn harness_daemon_returns_typed_unimplemented() {
     let mut stream = UnixStream::connect(fixture.socket()).expect("client connects");
     write_working_request(
         &mut stream,
-        InteractionPrompt {
-            harness: HarnessName::new("operator"),
-            interaction_id: "interaction-1".to_string(),
-            prompt: "Approve?".to_string(),
-            options: vec!["yes".to_string(), "no".to_string()],
-        }
-        .into(),
+        HarnessRequest::InteractionPrompt(InteractionPrompt {
+            harness_name: HarnessName::from("operator"),
+            interaction_identifier: "interaction-1".to_string(),
+            interaction_prompt_text: "Approve?".to_string(),
+            interaction_options: vec!["yes".to_string(), "no".to_string()],
+        }),
     );
     let event = read_working_event(&mut stream);
 
     assert_eq!(
         event,
         HarnessEvent::HarnessRequestUnimplemented(HarnessRequestUnimplemented {
-            harness: HarnessName::new("operator"),
-            operation: HarnessOperationKind::InteractionPrompt,
-            reason: HarnessUnimplementedReason::NotBuiltYet,
+            harness_name: HarnessName::from("operator"),
+            harness_operation_kind: HarnessOperationKind::PromptInteraction,
+            harness_unimplemented_reason: HarnessUnimplementedReason::NotBuiltYet,
         })
     );
 }
@@ -962,7 +967,7 @@ fn harness_daemon_returns_typed_unimplemented() {
 #[test]
 fn harness_daemon_answers_meta_harness_relation_with_typed_unimplemented() {
     let fixture = SocketFixture::new("meta-harness");
-    let supervision_socket = fixture.supervision_socket();
+    let meta_socket = fixture.meta_socket();
     let configuration_path = fixture.root.join("harness-daemon.rkyv");
     let configuration = DaemonConfigurationBuilder::new(&fixture)
         .with_supervision_socket_mode(0o600)
@@ -970,18 +975,19 @@ fn harness_daemon_answers_meta_harness_relation_with_typed_unimplemented() {
     write_configuration(&configuration_path, configuration.clone());
     let _daemon = SpawnedHarnessDaemon::spawn(&configuration_path);
 
-    wait_for_socket(&supervision_socket);
+    wait_for_socket(&meta_socket);
 
-    let mut stream =
-        UnixStream::connect(&supervision_socket).expect("meta-harness client connects");
-    write_meta_harness_request(&mut stream, MetaHarnessRequest::Configure(configuration));
-    let reply = read_meta_harness_reply(&mut stream);
+    let mut stream = UnixStream::connect(&meta_socket).expect("meta-harness client connects");
+    let wire = SignalWire::default();
+    wire.write(&mut stream, &MetaHarnessRequest::Configure(configuration))
+        .expect("meta request writes");
+    let reply: MetaHarnessReply = wire.read(&mut stream).expect("meta reply reads");
 
     assert_eq!(
         reply,
         MetaHarnessReply::RequestUnimplemented(MetaRequestUnimplemented {
-            operation: meta_signal_harness::OperationKind::Configure,
-            reason: MetaUnimplementedReason::NotBuiltYet,
+            meta_operation_kind: MetaOperationKind::ConfigureDaemon,
+            unimplemented_reason: MetaUnimplementedReason::NotBuiltYet,
         })
     );
 }
@@ -989,7 +995,7 @@ fn harness_daemon_answers_meta_harness_relation_with_typed_unimplemented() {
 #[test]
 fn harness_daemon_resolves_exact_pi_model_request() {
     let fixture = SocketFixture::new("resolve-exact-pi");
-    let supervision_socket = fixture.supervision_socket();
+    let meta_socket = fixture.meta_socket();
     let pi_rpc = PiRpcFixture::new("resolve-exact-pi");
     let configuration_path = fixture.root.join("harness-daemon.rkyv");
     write_configuration(
@@ -1002,23 +1008,23 @@ fn harness_daemon_resolves_exact_pi_model_request() {
         ]),
     );
     let _daemon = SpawnedHarnessDaemon::spawn(&configuration_path);
-    wait_for_socket(&supervision_socket);
+    wait_for_socket(&meta_socket);
 
     let request = model_resolution_request(
-        ModelSelector::Exact(NamedModel::new("gemma-4-26b-a4b-ud-q4-k-xl")),
+        ModelSelector::Exact(NamedModel::from("gemma-4-26b-a4b-ud-q4-k-xl")),
         EffortRequest::Low,
         ContinuationRequest::Fresh,
     );
-    let reply = meta_harness_exchange(&supervision_socket, request.into());
+    let reply = meta_harness_exchange(&meta_socket, MetaHarnessRequest::ResolveModel(request));
 
     assert_eq!(
         reply,
         MetaHarnessReply::ModelResolved(ModelResolved {
-            harness: HarnessName::new("operator"),
+            harness_name: HarnessName::from("operator"),
             harness_kind: ContractHarnessKind::Pi,
-            model: NamedModel::new("gemma-4-26b-a4b-ud-q4-k-xl"),
-            effort: EffortRequest::Low,
-            continuation: ContinuationHandle::Pi(PiContinuationIdentifier::new("operator")),
+            named_model: NamedModel::from("gemma-4-26b-a4b-ud-q4-k-xl"),
+            effort_request: EffortRequest::Low,
+            continuation_handle: ContinuationHandle::Pi(PiContinuationIdentifier::from("operator")),
         })
     );
 }
@@ -1026,7 +1032,7 @@ fn harness_daemon_resolves_exact_pi_model_request() {
 #[test]
 fn harness_daemon_resolves_capability_profile_request() {
     let fixture = SocketFixture::new("resolve-capability-pi");
-    let supervision_socket = fixture.supervision_socket();
+    let meta_socket = fixture.meta_socket();
     let pi_rpc = PiRpcFixture::new("resolve-capability-pi");
     let configuration_path = fixture.root.join("harness-daemon.rkyv");
     write_configuration(
@@ -1039,23 +1045,23 @@ fn harness_daemon_resolves_capability_profile_request() {
         ]),
     );
     let _daemon = SpawnedHarnessDaemon::spawn(&configuration_path);
-    wait_for_socket(&supervision_socket);
+    wait_for_socket(&meta_socket);
 
     let request = model_resolution_request(
-        ModelSelector::CapabilityProfile(CapabilityProfile::new("local")),
+        ModelSelector::CapabilityProfile(CapabilityProfile::from("local")),
         EffortRequest::Minimal,
         ContinuationRequest::Fresh,
     );
-    let reply = meta_harness_exchange(&supervision_socket, request.into());
+    let reply = meta_harness_exchange(&meta_socket, MetaHarnessRequest::ResolveModel(request));
 
     assert_eq!(
         reply,
         MetaHarnessReply::ModelResolved(ModelResolved {
-            harness: HarnessName::new("operator"),
+            harness_name: HarnessName::from("operator"),
             harness_kind: ContractHarnessKind::Pi,
-            model: NamedModel::new("gemma-4-26b-a4b-ud-q4-k-xl"),
-            effort: EffortRequest::Minimal,
-            continuation: ContinuationHandle::Pi(PiContinuationIdentifier::new("operator")),
+            named_model: NamedModel::from("gemma-4-26b-a4b-ud-q4-k-xl"),
+            effort_request: EffortRequest::Minimal,
+            continuation_handle: ContinuationHandle::Pi(PiContinuationIdentifier::from("operator")),
         })
     );
 }
@@ -1063,7 +1069,7 @@ fn harness_daemon_resolves_capability_profile_request() {
 #[test]
 fn harness_daemon_returns_typed_model_unavailable_reasons() {
     let fixture = SocketFixture::new("resolve-unavailable");
-    let supervision_socket = fixture.supervision_socket();
+    let meta_socket = fixture.meta_socket();
     let pi_rpc = PiRpcFixture::new("resolve-unavailable");
     let configuration_path = fixture.root.join("harness-daemon.rkyv");
     write_configuration(
@@ -1076,44 +1082,53 @@ fn harness_daemon_returns_typed_model_unavailable_reasons() {
         ]),
     );
     let _daemon = SpawnedHarnessDaemon::spawn(&configuration_path);
-    wait_for_socket(&supervision_socket);
+    wait_for_socket(&meta_socket);
 
     let unknown_model = model_resolution_request(
-        ModelSelector::Exact(NamedModel::new("unknown-model")),
+        ModelSelector::Exact(NamedModel::from("unknown-model")),
         EffortRequest::Low,
         ContinuationRequest::Fresh,
     );
     assert_eq!(
-        meta_harness_exchange(&supervision_socket, unknown_model.clone().into()),
+        meta_harness_exchange(
+            &meta_socket,
+            MetaHarnessRequest::ResolveModel(unknown_model.clone())
+        ),
         MetaHarnessReply::ModelUnavailable(ModelUnavailable {
-            request: unknown_model,
-            reason: ModelUnavailableReason::ModelNotKnown,
+            model_resolution_request: unknown_model,
+            model_unavailable_reason: ModelUnavailableReason::ModelNotKnown,
         })
     );
 
     let unsupported_capability = model_resolution_request(
-        ModelSelector::CapabilityProfile(CapabilityProfile::new("cloud-reasoning")),
+        ModelSelector::CapabilityProfile(CapabilityProfile::from("cloud-reasoning")),
         EffortRequest::Low,
         ContinuationRequest::Fresh,
     );
     assert_eq!(
-        meta_harness_exchange(&supervision_socket, unsupported_capability.clone().into()),
+        meta_harness_exchange(
+            &meta_socket,
+            MetaHarnessRequest::ResolveModel(unsupported_capability.clone())
+        ),
         MetaHarnessReply::ModelUnavailable(ModelUnavailable {
-            request: unsupported_capability,
-            reason: ModelUnavailableReason::CapabilityUnsupported,
+            model_resolution_request: unsupported_capability,
+            model_unavailable_reason: ModelUnavailableReason::CapabilityUnsupported,
         })
     );
 
     let unsupported_effort = model_resolution_request(
-        ModelSelector::Exact(NamedModel::new("gemma-4-26b-a4b-ud-q4-k-xl")),
+        ModelSelector::Exact(NamedModel::from("gemma-4-26b-a4b-ud-q4-k-xl")),
         EffortRequest::ExtraHigh,
         ContinuationRequest::Fresh,
     );
     assert_eq!(
-        meta_harness_exchange(&supervision_socket, unsupported_effort.clone().into()),
+        meta_harness_exchange(
+            &meta_socket,
+            MetaHarnessRequest::ResolveModel(unsupported_effort.clone())
+        ),
         MetaHarnessReply::ModelUnavailable(ModelUnavailable {
-            request: unsupported_effort,
-            reason: ModelUnavailableReason::EffortUnsupported,
+            model_resolution_request: unsupported_effort,
+            model_unavailable_reason: ModelUnavailableReason::EffortUnsupported,
         })
     );
 }
@@ -1121,7 +1136,7 @@ fn harness_daemon_returns_typed_model_unavailable_reasons() {
 #[test]
 fn harness_daemon_validates_continuation_handles_at_harness_boundary() {
     let fixture = SocketFixture::new("resolve-continuation");
-    let supervision_socket = fixture.supervision_socket();
+    let meta_socket = fixture.meta_socket();
     let pi_rpc = PiRpcFixture::new("resolve-continuation");
     let configuration_path = fixture.root.join("harness-daemon.rkyv");
     write_configuration(
@@ -1134,86 +1149,95 @@ fn harness_daemon_validates_continuation_handles_at_harness_boundary() {
         ]),
     );
     let _daemon = SpawnedHarnessDaemon::spawn(&configuration_path);
-    wait_for_socket(&supervision_socket);
+    wait_for_socket(&meta_socket);
 
     let required_pi = model_resolution_request(
-        ModelSelector::Exact(NamedModel::new("gemma-4-26b-a4b-ud-q4-k-xl")),
+        ModelSelector::Exact(NamedModel::from("gemma-4-26b-a4b-ud-q4-k-xl")),
         EffortRequest::Low,
-        ContinuationRequest::Require(ContinuationHandle::Pi(PiContinuationIdentifier::new(
+        ContinuationRequest::Require(ContinuationHandle::Pi(PiContinuationIdentifier::from(
             "operator",
         ))),
     );
     assert_eq!(
-        meta_harness_exchange(&supervision_socket, required_pi.into()),
+        meta_harness_exchange(&meta_socket, MetaHarnessRequest::ResolveModel(required_pi)),
         MetaHarnessReply::ModelResolved(ModelResolved {
-            harness: HarnessName::new("operator"),
+            harness_name: HarnessName::from("operator"),
             harness_kind: ContractHarnessKind::Pi,
-            model: NamedModel::new("gemma-4-26b-a4b-ud-q4-k-xl"),
-            effort: EffortRequest::Low,
-            continuation: ContinuationHandle::Pi(PiContinuationIdentifier::new("operator")),
+            named_model: NamedModel::from("gemma-4-26b-a4b-ud-q4-k-xl"),
+            effort_request: EffortRequest::Low,
+            continuation_handle: ContinuationHandle::Pi(PiContinuationIdentifier::from("operator")),
         })
     );
 
     let preferred_pi = model_resolution_request(
-        ModelSelector::Exact(NamedModel::new("gemma-4-26b-a4b-ud-q4-k-xl")),
+        ModelSelector::Exact(NamedModel::from("gemma-4-26b-a4b-ud-q4-k-xl")),
         EffortRequest::Low,
-        ContinuationRequest::Prefer(ContinuationHandle::Pi(PiContinuationIdentifier::new(
+        ContinuationRequest::Prefer(ContinuationHandle::Pi(PiContinuationIdentifier::from(
             "operator",
         ))),
     );
     assert_eq!(
-        meta_harness_exchange(&supervision_socket, preferred_pi.into()),
+        meta_harness_exchange(&meta_socket, MetaHarnessRequest::ResolveModel(preferred_pi)),
         MetaHarnessReply::ModelResolved(ModelResolved {
-            harness: HarnessName::new("operator"),
+            harness_name: HarnessName::from("operator"),
             harness_kind: ContractHarnessKind::Pi,
-            model: NamedModel::new("gemma-4-26b-a4b-ud-q4-k-xl"),
-            effort: EffortRequest::Low,
-            continuation: ContinuationHandle::Pi(PiContinuationIdentifier::new("operator")),
+            named_model: NamedModel::from("gemma-4-26b-a4b-ud-q4-k-xl"),
+            effort_request: EffortRequest::Low,
+            continuation_handle: ContinuationHandle::Pi(PiContinuationIdentifier::from("operator")),
         })
     );
 
     let wrong_provider = model_resolution_request(
-        ModelSelector::Exact(NamedModel::new("gemma-4-26b-a4b-ud-q4-k-xl")),
+        ModelSelector::Exact(NamedModel::from("gemma-4-26b-a4b-ud-q4-k-xl")),
         EffortRequest::Low,
-        ContinuationRequest::Prefer(ContinuationHandle::Claude(ClaudeSessionIdentifier::new(
+        ContinuationRequest::Prefer(ContinuationHandle::Claude(ClaudeSessionIdentifier::from(
             "claude-session",
         ))),
     );
     assert_eq!(
-        meta_harness_exchange(&supervision_socket, wrong_provider.clone().into()),
+        meta_harness_exchange(
+            &meta_socket,
+            MetaHarnessRequest::ResolveModel(wrong_provider.clone())
+        ),
         MetaHarnessReply::ModelUnavailable(ModelUnavailable {
-            request: wrong_provider,
-            reason: ModelUnavailableReason::ContinuationUnavailable,
+            model_resolution_request: wrong_provider,
+            model_unavailable_reason: ModelUnavailableReason::ContinuationUnavailable,
         })
     );
 
     let wrong_session_require = model_resolution_request(
-        ModelSelector::Exact(NamedModel::new("gemma-4-26b-a4b-ud-q4-k-xl")),
+        ModelSelector::Exact(NamedModel::from("gemma-4-26b-a4b-ud-q4-k-xl")),
         EffortRequest::Low,
-        ContinuationRequest::Require(ContinuationHandle::Pi(PiContinuationIdentifier::new(
+        ContinuationRequest::Require(ContinuationHandle::Pi(PiContinuationIdentifier::from(
             "elsewhere",
         ))),
     );
     assert_eq!(
-        meta_harness_exchange(&supervision_socket, wrong_session_require.clone().into()),
+        meta_harness_exchange(
+            &meta_socket,
+            MetaHarnessRequest::ResolveModel(wrong_session_require.clone())
+        ),
         MetaHarnessReply::ModelUnavailable(ModelUnavailable {
-            request: wrong_session_require,
-            reason: ModelUnavailableReason::ContinuationUnavailable,
+            model_resolution_request: wrong_session_require,
+            model_unavailable_reason: ModelUnavailableReason::ContinuationUnavailable,
         })
     );
 
     let wrong_session_prefer = model_resolution_request(
-        ModelSelector::Exact(NamedModel::new("gemma-4-26b-a4b-ud-q4-k-xl")),
+        ModelSelector::Exact(NamedModel::from("gemma-4-26b-a4b-ud-q4-k-xl")),
         EffortRequest::Low,
-        ContinuationRequest::Prefer(ContinuationHandle::Pi(PiContinuationIdentifier::new(
+        ContinuationRequest::Prefer(ContinuationHandle::Pi(PiContinuationIdentifier::from(
             "elsewhere",
         ))),
     );
     assert_eq!(
-        meta_harness_exchange(&supervision_socket, wrong_session_prefer.clone().into()),
+        meta_harness_exchange(
+            &meta_socket,
+            MetaHarnessRequest::ResolveModel(wrong_session_prefer.clone())
+        ),
         MetaHarnessReply::ModelUnavailable(ModelUnavailable {
-            request: wrong_session_prefer,
-            reason: ModelUnavailableReason::ContinuationUnavailable,
+            model_resolution_request: wrong_session_prefer,
+            model_unavailable_reason: ModelUnavailableReason::ContinuationUnavailable,
         })
     );
 }
@@ -1221,7 +1245,7 @@ fn harness_daemon_validates_continuation_handles_at_harness_boundary() {
 #[test]
 fn harness_daemon_resolves_required_continuation_against_later_matching_pi_candidate() {
     let fixture = SocketFixture::new("resolve-continuation-candidates");
-    let supervision_socket = fixture.supervision_socket();
+    let meta_socket = fixture.meta_socket();
     let first_pi_rpc = PiRpcFixture::new("resolve-continuation-candidates-first");
     let second_pi_rpc = PiRpcFixture::new("resolve-continuation-candidates-second");
     let configuration_path = fixture.root.join("harness-daemon.rkyv");
@@ -1239,23 +1263,23 @@ fn harness_daemon_resolves_required_continuation_against_later_matching_pi_candi
         ]),
     );
     let _daemon = SpawnedHarnessDaemon::spawn(&configuration_path);
-    wait_for_socket(&supervision_socket);
+    wait_for_socket(&meta_socket);
 
     let request = model_resolution_request(
-        ModelSelector::Exact(NamedModel::new("gemma-4-26b-a4b-ud-q4-k-xl")),
+        ModelSelector::Exact(NamedModel::from("gemma-4-26b-a4b-ud-q4-k-xl")),
         EffortRequest::Low,
-        ContinuationRequest::Require(ContinuationHandle::Pi(PiContinuationIdentifier::new(
+        ContinuationRequest::Require(ContinuationHandle::Pi(PiContinuationIdentifier::from(
             "second",
         ))),
     );
     assert_eq!(
-        meta_harness_exchange(&supervision_socket, request.into()),
+        meta_harness_exchange(&meta_socket, MetaHarnessRequest::ResolveModel(request)),
         MetaHarnessReply::ModelResolved(ModelResolved {
-            harness: HarnessName::new("second"),
+            harness_name: HarnessName::from("second"),
             harness_kind: ContractHarnessKind::Pi,
-            model: NamedModel::new("gemma-4-26b-a4b-ud-q4-k-xl"),
-            effort: EffortRequest::Low,
-            continuation: ContinuationHandle::Pi(PiContinuationIdentifier::new("second")),
+            named_model: NamedModel::from("gemma-4-26b-a4b-ud-q4-k-xl"),
+            effort_request: EffortRequest::Low,
+            continuation_handle: ContinuationHandle::Pi(PiContinuationIdentifier::from("second")),
         })
     );
 }
@@ -1263,7 +1287,7 @@ fn harness_daemon_resolves_required_continuation_against_later_matching_pi_candi
 #[test]
 fn harness_daemon_reports_adapter_configuration_missing_for_unlaunchable_match() {
     let fixture = SocketFixture::new("resolve-adapter-missing");
-    let supervision_socket = fixture.supervision_socket();
+    let meta_socket = fixture.meta_socket();
     let configuration_path = fixture.root.join("harness-daemon.rkyv");
     write_configuration(
         &configuration_path,
@@ -1272,18 +1296,21 @@ fn harness_daemon_reports_adapter_configuration_missing_for_unlaunchable_match()
         ]),
     );
     let _daemon = SpawnedHarnessDaemon::spawn(&configuration_path);
-    wait_for_socket(&supervision_socket);
+    wait_for_socket(&meta_socket);
 
     let request = model_resolution_request(
-        ModelSelector::CapabilityProfile(CapabilityProfile::new("pi")),
+        ModelSelector::CapabilityProfile(CapabilityProfile::from("pi")),
         EffortRequest::Low,
         ContinuationRequest::Fresh,
     );
     assert_eq!(
-        meta_harness_exchange(&supervision_socket, request.clone().into()),
+        meta_harness_exchange(
+            &meta_socket,
+            MetaHarnessRequest::ResolveModel(request.clone())
+        ),
         MetaHarnessReply::ModelUnavailable(ModelUnavailable {
-            request,
-            reason: ModelUnavailableReason::AdapterConfigurationMissing,
+            model_resolution_request: request,
+            model_unavailable_reason: ModelUnavailableReason::AdapterConfigurationMissing,
         })
     );
 }
@@ -1304,29 +1331,24 @@ fn harness_daemon_answers_component_supervision_relation() {
     wait_for_socket(&supervision_socket);
     assert_eq!(socket_mode(&supervision_socket), 0o600);
 
-    // The emitted meta tier serves one engine-management request per accepted
-    // connection, so each exchange opens a fresh supervision connection.
     assert!(matches!(
         supervision_exchange(
             &supervision_socket,
             SupervisionRequest::Announce(Presence {
-                expected_component: ComponentName::new("harness").into(),
-                expected_kind: ComponentKind::Harness.into(),
-                engine_management_protocol_version: EngineManagementProtocolVersion::new(1),
-            }
-            .into()),
+                expected_component: "harness".into(),
+                expected_kind: ComponentKind::Harness,
+                engine_management_protocol_version: 1,
+            }),
         ),
         SupervisionReply::Identified(identity)
-            if identity.payload().component_name == ComponentName::new("harness")
-                && identity.payload().component_kind == ComponentKind::Harness
+            if identity.component_name == "harness"
+                && identity.component_kind == ComponentKind::Harness
     ));
 
     assert!(matches!(
         supervision_exchange(
             &supervision_socket,
-            SupervisionRequest::Query(
-                SupervisionQuery::ReadinessStatus(ComponentName::new("harness",)).into()
-            ),
+            SupervisionRequest::Query(LifecycleQuery::ReadinessStatus("harness".into())),
         ),
         SupervisionReply::Ready(_)
     ));
@@ -1334,29 +1356,64 @@ fn harness_daemon_answers_component_supervision_relation() {
     assert!(matches!(
         supervision_exchange(
             &supervision_socket,
-            SupervisionRequest::Query(SupervisionQuery::HealthStatus(ComponentName::new(
-                "harness",
-            ))
-            .into()),
+            SupervisionRequest::Query(LifecycleQuery::HealthStatus("harness".into())),
         ),
-        SupervisionReply::HealthReport(report)
-            if *report.payload().payload() == ComponentHealth::Running
+        SupervisionReply::HealthReport(ComponentHealth::Running)
     ));
 }
 
-/// One owner-only supervision exchange: open a fresh connection, send one
-/// engine-management request, read its reply, and drop the connection. The
-/// emitted meta tier serves exactly one request per accepted connection.
-fn supervision_exchange(socket: &Path, request: SupervisionRequest) -> SupervisionReply {
-    let mut stream = UnixStream::connect(socket).expect("supervision client connects");
-    write_supervision_request(&mut stream, request);
-    read_supervision_reply(&mut stream)
+/// The supervision socket carries only the engine-management lifecycle: a
+/// meta request sent to it is not answered as one.
+#[test]
+fn harness_daemon_keeps_meta_and_supervision_on_separate_sockets() {
+    let fixture = SocketFixture::new("separate-management-sockets");
+    let configuration_path = fixture.root.join("harness-daemon.rkyv");
+    let configuration =
+        DaemonConfigurationBuilder::new(&fixture).build(vec![fixture_instance("operator").build()]);
+    write_configuration(&configuration_path, configuration);
+    let _daemon = SpawnedHarnessDaemon::spawn(&configuration_path);
+    wait_for_socket(&fixture.supervision_socket());
+    wait_for_socket(&fixture.meta_socket());
+    assert_ne!(fixture.supervision_socket(), fixture.meta_socket());
+    assert_eq!(socket_mode(&fixture.meta_socket()), 0o600);
+
+    let mut stream =
+        UnixStream::connect(fixture.supervision_socket()).expect("supervision client connects");
+    let wire = SignalWire::default();
+    wire.write(
+        &mut stream,
+        &MetaHarnessRequest::LaunchSession(signal_harness::SessionLaunchRequest {
+            harness_kind: ContractHarnessKind::Codex,
+            agent_identity_token: "xk3f".into(),
+            initial_prompt: "never launched".into(),
+            continuation_request: ContinuationRequest::Fresh,
+        }),
+    )
+    .expect("write a meta frame to the supervision socket");
+    let reply: Result<MetaHarnessReply, _> = wire.read(&mut stream);
+    assert!(
+        reply.is_err(),
+        "the supervision socket must not answer a meta request: {reply:?}"
+    );
 }
 
+/// One supervision exchange: open a fresh connection to the supervision
+/// socket, send one engine-management request, read its reply.
+fn supervision_exchange(socket: &Path, request: SupervisionRequest) -> SupervisionReply {
+    let mut stream = UnixStream::connect(socket).expect("supervision client connects");
+    let wire = SignalWire::default();
+    wire.write(&mut stream, &request)
+        .expect("supervision request writes");
+    wire.read(&mut stream).expect("supervision reply reads")
+}
+
+/// One meta exchange on the meta socket.
 fn meta_harness_exchange(socket: &Path, request: MetaHarnessRequest) -> MetaHarnessReply {
     let mut stream = UnixStream::connect(socket).expect("meta-harness client connects");
-    write_meta_harness_request(&mut stream, request);
-    read_meta_harness_reply(&mut stream)
+    let wire = SignalWire::default();
+    wire.write(&mut stream, &request)
+        .expect("meta-harness request writes");
+    wire.read(&mut stream).expect("meta-harness reply reads")
 }
 
 fn model_resolution_request(
@@ -1365,27 +1422,30 @@ fn model_resolution_request(
     continuation: ContinuationRequest,
 ) -> ModelResolutionRequest {
     ModelResolutionRequest {
-        model: ModelRequest { selector, effort },
-        continuation,
+        model_request: ModelRequest {
+            model_selector: selector,
+            effort_request: effort,
+        },
+        continuation_request: continuation,
     }
 }
 
 /// Builds a binary `HarnessDaemonConfiguration` against one fixture's sockets.
 struct DaemonConfigurationBuilder {
-    harness_socket_path: DomainSocketPath,
+    harness_socket_path: String,
     harness_socket_mode: u32,
-    supervision_socket_path: EngineManagementSocketPath,
+    meta_socket_path: String,
+    supervision_socket_path: String,
     supervision_socket_mode: u32,
 }
 
 impl DaemonConfigurationBuilder {
     fn new(fixture: &SocketFixture) -> Self {
         Self {
-            harness_socket_path: DomainSocketPath::new(fixture.socket().display().to_string()),
+            harness_socket_path: fixture.socket().display().to_string(),
             harness_socket_mode: 0o600,
-            supervision_socket_path: EngineManagementSocketPath::new(
-                fixture.supervision_socket().display().to_string(),
-            ),
+            meta_socket_path: fixture.meta_socket().display().to_string(),
+            supervision_socket_path: fixture.supervision_socket().display().to_string(),
             supervision_socket_mode: 0o600,
         }
     }
@@ -1403,13 +1463,13 @@ impl DaemonConfigurationBuilder {
     fn build(self, harnesses: Vec<HarnessInstanceConfiguration>) -> HarnessDaemonConfiguration {
         HarnessDaemonConfiguration {
             domain_socket_path: self.harness_socket_path,
-            domain_socket_mode: DomainSocketMode::new(self.harness_socket_mode.into()),
+            domain_socket_mode: self.harness_socket_mode.into(),
+            meta_socket_path: self.meta_socket_path,
+            meta_socket_mode: 0o600,
             engine_management_socket_path: self.supervision_socket_path,
-            engine_management_socket_mode: EngineManagementSocketMode::new(
-                self.supervision_socket_mode.into(),
-            ),
-            owner_identity: OwnerIdentity::UnixUser(UnixUserIdentifier::new(1000)),
-            harnesses,
+            engine_management_socket_mode: self.supervision_socket_mode.into(),
+            owner_identity: OwnerIdentity::UnixUser(1000),
+            harness_instance_configurations: harnesses,
         }
     }
 }
@@ -1418,14 +1478,14 @@ impl DaemonConfigurationBuilder {
 struct HarnessInstanceConfigurationBuilder {
     harness_name: HarnessName,
     harness_kind: ContractHarnessKind,
-    terminal_socket_path: Option<TerminalSocketPath>,
+    terminal_socket_path: Option<String>,
     pi_rpc_adapter: Option<signal_harness::PiRpcJsonlAdapterConfiguration>,
 }
 
 impl HarnessInstanceConfigurationBuilder {
     fn new(harness_name: &str, harness_kind: ContractHarnessKind) -> Self {
         Self {
-            harness_name: HarnessName::new(harness_name),
+            harness_name: HarnessName::from(harness_name),
             harness_kind,
             terminal_socket_path: None,
             pi_rpc_adapter: None,
@@ -1433,18 +1493,16 @@ impl HarnessInstanceConfigurationBuilder {
     }
 
     fn with_terminal_socket_path(mut self, path: &Path) -> Self {
-        self.terminal_socket_path = Some(TerminalSocketPath::new(path.display().to_string()));
+        self.terminal_socket_path = Some(path.display().to_string());
         self
     }
 
     fn with_pi_rpc(mut self, fixture: &PiRpcFixture) -> Self {
         self.pi_rpc_adapter = Some(signal_harness::PiRpcJsonlAdapterConfiguration {
-            command_path: PiRpcCommandPath::new(fixture.command_path().display().to_string()),
-            session_directory_path: PiRpcSessionDirectoryPath::new(
-                fixture.session_directory().display().to_string(),
-            ),
-            delivery_mode: signal_harness::PiRpcDeliveryMode::Steer,
-            model_pattern: None,
+            pi_rpc_command_path: fixture.command_path().display().to_string(),
+            pi_rpc_session_directory_path: fixture.session_directory().display().to_string(),
+            pi_rpc_model_pattern_option: None,
+            pi_rpc_delivery_mode: signal_harness::PiRpcDeliveryMode::Steer,
         });
         self
     }
@@ -1453,7 +1511,7 @@ impl HarnessInstanceConfigurationBuilder {
         let Some(adapter) = self.pi_rpc_adapter.as_mut() else {
             panic!("pi model pattern requires pi rpc adapter");
         };
-        adapter.model_pattern = Some(signal_harness::PiRpcModelPattern::new(model_pattern));
+        adapter.pi_rpc_model_pattern_option = Some(model_pattern.to_owned());
         self
     }
 
@@ -1461,8 +1519,8 @@ impl HarnessInstanceConfigurationBuilder {
         HarnessInstanceConfiguration {
             harness_name: self.harness_name,
             harness_kind: self.harness_kind,
-            terminal_socket_path: self.terminal_socket_path,
-            pi_rpc_adapter: self.pi_rpc_adapter,
+            terminal_socket_path_option: self.terminal_socket_path,
+            pi_rpc_jsonl_adapter_configuration_option: self.pi_rpc_adapter,
         }
     }
 }
@@ -1477,74 +1535,44 @@ fn write_configuration(path: &Path, configuration: HarnessDaemonConfiguration) {
         .expect("write binary harness configuration");
 }
 
-/// Writes one working harness request through the daemon shell's length-prefixed
-/// envelope: a single bare `HarnessFrame` per body.
+/// Writes one ordinary `Query` frame.
 fn write_working_request(stream: &mut UnixStream, request: HarnessRequest) {
-    let frame = HarnessFrame::new(HarnessFrameBody::Request {
-        exchange: test_exchange(),
-        request: Request::from_payload(request),
-    });
-    write_length_prefixed(stream, &frame.encode().expect("harness request encodes"));
+    SignalWire::default()
+        .write(stream, &request)
+        .expect("harness request writes");
 }
 
+/// Reads one ordinary `Response` frame.
 fn read_working_event(stream: &mut UnixStream) -> HarnessEvent {
-    let body = read_length_prefixed_frame(stream).expect("event frame reads");
-    let frame = HarnessFrame::decode(&body).expect("event frame decodes");
-    match frame.into_body() {
-        HarnessFrameBody::Reply { reply, .. } => match reply {
-            Reply::Accepted { per_operation, .. } => match per_operation.into_head() {
-                SubReply::Ok(payload) => payload,
-                other => panic!("expected ok harness sub-reply, got {other:?}"),
-            },
-            Reply::Rejected { reason } => panic!("expected harness event reply, got {reason:?}"),
-        },
-        other => panic!("expected harness event reply, got {other:?}"),
-    }
+    SignalWire::default()
+        .read(stream)
+        .expect("harness response reads")
 }
 
 async fn write_working_request_async(stream: &mut tokio::net::UnixStream, request: HarnessRequest) {
-    let frame = HarnessFrame::new(HarnessFrameBody::Request {
-        exchange: test_exchange(),
-        request: Request::from_payload(request),
-    });
-    LengthPrefixedCodec::default()
-        .write_body_async(
-            stream,
-            &LengthPrefixedFrameBody::new(frame.encode().expect("harness request encodes")),
-        )
+    SignalWire::default()
+        .write_async(stream, &request)
         .await
         .expect("write harness request");
 }
 
 async fn read_working_event_async(stream: &mut tokio::net::UnixStream) -> HarnessEvent {
-    let body = LengthPrefixedCodec::default()
-        .read_body_async(stream)
+    SignalWire::default()
+        .read_async(stream)
         .await
-        .expect("event frame reads")
-        .into_bytes();
-    let frame = HarnessFrame::decode(&body).expect("event frame decodes");
-    match frame.into_body() {
-        HarnessFrameBody::Reply { reply, .. } => match reply {
-            Reply::Accepted { per_operation, .. } => match per_operation.into_head() {
-                SubReply::Ok(payload) => payload,
-                other => panic!("expected ok harness sub-reply, got {other:?}"),
-            },
-            Reply::Rejected { reason } => panic!("expected harness event reply, got {reason:?}"),
-        },
-        other => panic!("expected harness event reply, got {other:?}"),
-    }
+        .expect("harness response reads")
 }
 
 fn transcript_snapshot_token(event: HarnessEvent) -> HarnessTranscriptToken {
     match event {
-        HarnessEvent::HarnessTranscriptSnapshot(snapshot) => snapshot.token,
+        HarnessEvent::HarnessTranscriptSnapshot(snapshot) => snapshot.harness_transcript_token,
         other => panic!("expected transcript snapshot, got {other:?}"),
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 struct ReceivedWorkingStreamEvent {
-    token: SubscriptionTokenInner,
+    token: HarnessTranscriptToken,
     event: HarnessStreamEvent,
 }
 
@@ -1557,79 +1585,13 @@ async fn read_working_stream_event_async(
 async fn read_working_stream_frame_async(
     stream: &mut tokio::net::UnixStream,
 ) -> ReceivedWorkingStreamEvent {
-    let body = LengthPrefixedCodec::default()
-        .read_body_async(stream)
-        .await
-        .expect("stream event frame reads")
-        .into_bytes();
-    let frame = HarnessFrame::decode(&body).expect("stream event frame decodes");
-    match frame.into_body() {
-        HarnessFrameBody::SubscriptionEvent { token, event, .. } => {
-            ReceivedWorkingStreamEvent { token, event }
-        }
-        other => panic!("expected harness stream event, got {other:?}"),
-    }
-}
-
-fn write_meta_harness_request(stream: &mut UnixStream, request: MetaHarnessRequest) {
-    let frame = MetaHarnessFrame::new(MetaHarnessFrameBody::Request {
-        exchange: test_exchange(),
-        request: Request::from_payload(request),
-    });
-    write_length_prefixed(
-        stream,
-        &frame.encode().expect("meta-harness request encodes"),
-    );
-}
-
-fn read_meta_harness_reply(stream: &mut UnixStream) -> MetaHarnessReply {
-    let body = read_length_prefixed_frame(stream).expect("meta-harness reply reads");
-    let frame = MetaHarnessFrame::decode(&body).expect("meta-harness reply decodes");
-    match frame.into_body() {
-        MetaHarnessFrameBody::Reply { reply, .. } => match reply {
-            Reply::Accepted { per_operation, .. } => match per_operation.into_head() {
-                SubReply::Ok(payload) => payload,
-                other => panic!("expected ok meta-harness sub-reply, got {other:?}"),
-            },
-            Reply::Rejected { reason } => panic!("expected meta-harness reply, got {reason:?}"),
+    match read_working_event_async(stream).await {
+        HarnessEvent::HarnessTranscriptEvent(event) => ReceivedWorkingStreamEvent {
+            token: event.harness_transcript_token,
+            event: event.harness_stream_event,
         },
-        other => panic!("expected meta-harness reply, got {other:?}"),
+        other => panic!("expected harness transcript event, got {other:?}"),
     }
-}
-
-fn write_supervision_request(stream: &mut UnixStream, request: SupervisionRequest) {
-    let frame = SupervisionFrame::new(SupervisionFrameBody::Request {
-        exchange: test_exchange(),
-        request: Request::from_payload(request),
-    });
-    write_length_prefixed(
-        stream,
-        &frame.encode().expect("supervision request encodes"),
-    );
-}
-
-fn read_supervision_reply(stream: &mut UnixStream) -> SupervisionReply {
-    let body = read_length_prefixed_frame(stream).expect("supervision reply reads");
-    let frame = SupervisionFrame::decode(&body).expect("supervision reply decodes");
-    match frame.into_body() {
-        SupervisionFrameBody::Reply { reply, .. } => match reply {
-            Reply::Accepted { per_operation, .. } => match per_operation.into_head() {
-                SubReply::Ok(payload) => payload,
-                other => panic!("expected ok supervision sub-reply, got {other:?}"),
-            },
-            Reply::Rejected { reason } => panic!("expected supervision reply, got {reason:?}"),
-        },
-        other => panic!("expected supervision reply, got {other:?}"),
-    }
-}
-
-fn write_length_prefixed(stream: &mut UnixStream, body: &[u8]) {
-    let length = u32::try_from(body.len()).expect("frame body fits a u32 length prefix");
-    stream
-        .write_all(&length.to_be_bytes())
-        .expect("length prefix writes");
-    stream.write_all(body).expect("frame body writes");
-    stream.flush().expect("frame flushes");
 }
 
 fn socket_mode(socket: &Path) -> u32 {
@@ -1649,14 +1611,6 @@ fn wait_for_socket(socket: &Path) {
         thread::sleep(Duration::from_millis(10));
     }
     panic!("socket was not created: {}", socket.display());
-}
-
-fn test_exchange() -> ExchangeIdentifier {
-    ExchangeIdentifier::new(
-        SessionEpoch::new(0),
-        ExchangeLane::Connector,
-        LaneSequence::first(),
-    )
 }
 
 fn unique_nanos() -> u128 {

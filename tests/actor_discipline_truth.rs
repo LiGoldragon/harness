@@ -29,12 +29,12 @@ use harness::runtime::Harness;
 use harness::subscription::{
     TranscriptDeltaPublisher, TranscriptStreamingReplyHandler, TranscriptSubscriptionManager,
 };
-use harness::supervision::SupervisionPhase;
+use harness::supervision::SupervisionListener;
 
 #[test]
 fn public_actor_nouns_carry_data() {
     assert!(std::mem::size_of::<Harness>() > 0);
-    assert!(std::mem::size_of::<SupervisionPhase>() > 0);
+    assert!(std::mem::size_of::<SupervisionListener>() > 0);
     assert!(std::mem::size_of::<TranscriptSubscriptionManager>() > 0);
     assert!(std::mem::size_of::<TranscriptStreamingReplyHandler>() > 0);
     assert!(std::mem::size_of::<TranscriptDeltaPublisher>() > 0);

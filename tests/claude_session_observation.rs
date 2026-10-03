@@ -32,10 +32,10 @@ fn observed_turn_projects_assistant_text_and_defers_accumulated_context() {
     let snapshot = fixture.snapshot();
     let recovered = snapshot.recovered_turn().clone();
     let observed = ObservedClaudeTurn::new(
-        HarnessName::new("designer-session-1"),
+        HarnessName::from("designer-session-1"),
         TurnLaunch::Fresh,
         ClaudeSessionLifecycle::Completed,
-        StreamedEventCount::new(7),
+        StreamedEventCount::from(7_i64),
         snapshot,
     );
 
@@ -43,21 +43,21 @@ fn observed_turn_projects_assistant_text_and_defers_accumulated_context() {
 
     // The per-session harness key and launch/lifecycle records the runtime
     // supplied ride through unchanged.
-    assert_eq!(observation.harness.as_str(), "designer-session-1");
-    assert_eq!(observation.launch, TurnLaunch::Fresh);
-    assert_eq!(observation.lifecycle, ClaudeSessionLifecycle::Completed);
-    assert_eq!(observation.streamed_event_count.into_u64(), 7);
+    assert_eq!(observation.harness_name.as_str(), "designer-session-1");
+    assert_eq!(observation.turn_launch, TurnLaunch::Fresh);
+    assert_eq!(
+        observation.claude_session_lifecycle,
+        ClaudeSessionLifecycle::Completed
+    );
+    assert_eq!(observation.streamed_event_count, 7);
 
     // Session facts recovered from the JSONL transcript.
     assert_eq!(
-        observation
-            .session_identifier
-            .as_ref()
-            .map(|id| id.as_str()),
+        observation.claude_session_identifier_option.as_deref(),
         Some("session-alpha")
     );
     assert_eq!(
-        observation.model.as_ref().map(|model| model.as_str()),
+        observation.claude_model_option.as_deref(),
         Some("claude-3-5-haiku-latest")
     );
     assert!(observation.reached_end_of_turn);
@@ -65,27 +65,27 @@ fn observed_turn_projects_assistant_text_and_defers_accumulated_context() {
     // The response is sourced from the recovered turn's assistant_text getter,
     // NOT the Claude CLI `result` line.
     assert_eq!(
-        observation.response.as_ref().map(|text| text.as_str()),
+        observation.assistant_response_text_option.as_deref(),
         Some("FINAL_MARKER hello there")
     );
     assert_eq!(
-        observation.response.as_ref().map(|text| text.as_str()),
+        observation.assistant_response_text_option.as_deref(),
         recovered.assistant_text().as_deref()
     );
 
     // The transcript path is the JSONL file the observer discovered.
     let transcript_path = observation
-        .transcript_path
+        .transcript_path_option
         .as_ref()
         .expect("transcript path discovered");
     assert!(transcript_path.as_str().ends_with("session-alpha.jsonl"));
 
     // accumulated_context is DEFERRED (og38.1): the projection synthesizes no
     // figure until the A/B sourcing ruling lands.
-    assert_eq!(observation.accumulated_context, None);
+    assert_eq!(observation.context_tokens_option, None);
 
     // Display/ordering timestamp is infrastructure-minted and non-zero.
-    assert!(*observation.last_activity.payload() > 0);
+    assert!(observation.timestamp_nanoseconds > 0);
 }
 
 #[test]
@@ -103,35 +103,35 @@ fn observed_turn_counts_tool_calls_and_status_transitions_from_metadata() {
 
     let snapshot = fixture.snapshot_for("session-beta");
     let recovered = snapshot.recovered_turn().clone();
-    let expected_tool_calls = recovered.tool_calls().len() as u64;
-    let expected_status_transitions = recovered.status_transitions().len() as u64;
+    let expected_tool_calls = recovered.tool_calls().len() as i64;
+    let expected_status_transitions = recovered.status_transitions().len() as i64;
     assert_eq!(expected_tool_calls, 1);
     assert!(expected_status_transitions > 0);
 
     let observed = ObservedClaudeTurn::new(
-        HarnessName::new("designer-session-2"),
+        HarnessName::from("designer-session-2"),
         TurnLaunch::Resumed,
         ClaudeSessionLifecycle::Exited(AdapterExitStatus::Success),
-        StreamedEventCount::new(12),
+        StreamedEventCount::from(12_i64),
         snapshot,
     );
     let observation = observed.into_session_observation();
 
-    assert_eq!(observation.launch, TurnLaunch::Resumed);
+    assert_eq!(observation.turn_launch, TurnLaunch::Resumed);
     assert_eq!(
-        observation.lifecycle,
+        observation.claude_session_lifecycle,
         ClaudeSessionLifecycle::Exited(AdapterExitStatus::Success)
     );
-    assert_eq!(observation.tool_call_count.into_u64(), expected_tool_calls);
+    assert_eq!(observation.tool_call_count, expected_tool_calls);
     assert_eq!(
-        observation.status_transition_count.into_u64(),
+        observation.status_transition_count,
         expected_status_transitions
     );
     assert_eq!(
-        observation.response.as_ref().map(|text| text.as_str()),
+        observation.assistant_response_text_option.as_deref(),
         Some("FINAL_MARKER done")
     );
-    assert_eq!(observation.accumulated_context, None);
+    assert_eq!(observation.context_tokens_option, None);
 }
 
 #[test]
@@ -147,21 +147,24 @@ fn observed_turn_with_no_assistant_text_leaves_response_absent() {
 
     let snapshot = fixture.snapshot_for("session-gamma");
     let observed = ObservedClaudeTurn::new(
-        HarnessName::new("designer-session-3"),
+        HarnessName::from("designer-session-3"),
         TurnLaunch::SelfHealed,
         ClaudeSessionLifecycle::Active,
-        StreamedEventCount::new(3),
+        StreamedEventCount::from(3_i64),
         snapshot,
     );
     let observation = observed.into_session_observation();
 
-    assert_eq!(observation.launch, TurnLaunch::SelfHealed);
-    assert_eq!(observation.lifecycle, ClaudeSessionLifecycle::Active);
+    assert_eq!(observation.turn_launch, TurnLaunch::SelfHealed);
+    assert_eq!(
+        observation.claude_session_lifecycle,
+        ClaudeSessionLifecycle::Active
+    );
     assert!(!observation.reached_end_of_turn);
     // A turn still in flight observed no assistant text: the response is
     // genuinely absent, not an empty string.
-    assert_eq!(observation.response, None);
-    assert_eq!(observation.accumulated_context, None);
+    assert_eq!(observation.assistant_response_text_option, None);
+    assert_eq!(observation.context_tokens_option, None);
 }
 
 struct ClaudeFixture {

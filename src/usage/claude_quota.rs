@@ -9,12 +9,14 @@ use std::io::Read;
 use std::time::Duration;
 
 use serde_json::Value;
-use usage_contract::{
-    QuotaLimit, ResetBasis, SubscriptionObservation, SubscriptionUsage, UsageProvider, UsageSource,
-    UsageUnavailable, UsageUnavailableReason, WindowDurationBasis,
+use signal_harness::{
+    PeriodSemantics, QuotaLimit, ResetBasis, SubscriptionObservation, SubscriptionUsage,
+    UsageProvider, UsageSource, UsageUnavailable, UsageUnavailableReason, WindowDurationBasis,
 };
 
-use super::pace::{WindowNormalizing, WindowReading};
+use super::window::{
+    LocalZone, ProviderPercent, WindowNormalizing, WindowObservation, WindowReading,
+};
 use super::{ObservationInstant, QuotaDocument, QuotaSource, UsageHome};
 
 const ANTHROPIC_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
@@ -23,14 +25,18 @@ const CREDENTIAL_BYTE_LIMIT: u64 = 64 * 1024;
 const RESPONSE_BYTE_LIMIT: u64 = 1024 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
 const EXPIRY_MARGIN_MILLISECONDS: i64 = 60_000;
-const FIVE_HOUR_MINUTES: i64 = 300;
-const SEVEN_DAY_MINUTES: i64 = 10_080;
-/// Top-level keys that are understood; any other non-null key is retained by
-/// name as an unrecognized window.
-const RECOGNIZED_KEYS: [&str; 7] = [
-    "five_hour",
-    "seven_day",
-    "limits",
+/// The provider's own named windows and the durations their names state.
+const NAMED_WINDOWS: [(&str, i64); 2] = [("five_hour", 300), ("seven_day", 10_080)];
+const LIMITS_KEY: &str = "limits";
+/// Keys modelled inside a named window; any other present key is an
+/// unmodeled source fact.
+const NAMED_WINDOW_KEYS: [&str; 2] = ["utilization", "resets_at"];
+/// Keys modelled inside a `limits[]` entry; any other present key is an
+/// unmodeled source fact.
+const LIMIT_ENTRY_KEYS: [&str; 5] = ["kind", "group", "percent", "resets_at", "scope"];
+/// Top-level allowance, spend and account facts the reply names without
+/// modelling and never turns into a quota window.
+const AUXILIARY_KEYS: [&str; 4] = [
     "extra_usage",
     "spend",
     "seven_day_breakdown",
@@ -62,6 +68,7 @@ impl ClaudeUsageEndpoint {
 pub struct ClaudeUsageSource {
     home: UsageHome,
     endpoint: ClaudeUsageEndpoint,
+    zone: LocalZone,
 }
 
 /// A Claude usage response body with the plan named by the credential file.
@@ -86,8 +93,12 @@ struct ClaudeCredential {
 }
 
 impl ClaudeUsageSource {
-    pub fn new(home: UsageHome, endpoint: ClaudeUsageEndpoint) -> Self {
-        Self { home, endpoint }
+    pub fn new(home: UsageHome, endpoint: ClaudeUsageEndpoint, zone: LocalZone) -> Self {
+        Self {
+            home,
+            endpoint,
+            zone,
+        }
     }
 
     fn credential(
@@ -176,7 +187,7 @@ impl QuotaSource for ClaudeUsageSource {
         let observation = self
             .credential(instant)
             .and_then(|credential| self.fetch(credential))
-            .map(|document| document.normalize(ObservationInstant::now()));
+            .map(|document| document.normalize(ObservationInstant::now(), &self.zone));
         vec![match observation {
             Ok(usage) => SubscriptionObservation::Observed(usage),
             Err(reason) => SubscriptionObservation::Unavailable(UsageUnavailable {
@@ -208,54 +219,85 @@ impl ClaudeUsageDocument {
         Some(parsed.unix_timestamp())
     }
 
-    fn basis_points(value: Option<&Value>) -> Option<i64> {
-        let percent = value?.as_f64()?;
-        percent
-            .is_finite()
-            .then(|| (percent * 100.0).round() as i64)
+    fn reset_basis(value: Option<&Value>) -> ResetBasis {
+        Self::reset_second(value).map_or(ResetBasis::Unknown, ResetBasis::ProviderResetTime)
     }
 
-    fn named_window_second(&self, key: &str) -> Option<i64> {
-        Self::reset_second(self.body.get(key)?.get("resets_at"))
+    fn percent(value: Option<&Value>) -> ProviderPercent {
+        value
+            .and_then(Value::as_f64)
+            .map_or(ProviderPercent::Absent, ProviderPercent::Present)
     }
 
-    /// The window length implied by the provider's own names: the `weekly`
-    /// group, or the reset shared with the `five_hour` / `seven_day` window.
-    fn named_duration(&self, group: &str, reset: Option<i64>) -> WindowDurationBasis {
-        if group == "weekly" {
-            return WindowDurationBasis::ProviderWindowNamed(SEVEN_DAY_MINUTES);
-        }
-        match reset {
-            Some(second) if Some(second) == self.named_window_second("five_hour") => {
-                WindowDurationBasis::ProviderWindowNamed(FIVE_HOUR_MINUTES)
-            }
-            Some(second) if Some(second) == self.named_window_second("seven_day") => {
-                WindowDurationBasis::ProviderWindowNamed(SEVEN_DAY_MINUTES)
-            }
-            _ => WindowDurationBasis::Unknown,
-        }
+    /// The present (non-null) keys of an object that are not modelled.
+    fn unmodeled_keys<'a>(value: &'a Value, modelled: &'a [&str]) -> Vec<&'a str> {
+        value
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter(|(key, value)| !value.is_null() && !modelled.contains(&key.as_str()))
+            .map(|(key, _)| key.as_str())
+            .collect()
     }
 
-    fn reset_basis(second: Option<i64>) -> ResetBasis {
-        second.map_or(ResetBasis::Unknown, ResetBasis::ProviderResetTime)
+    /// The provider's named top-level windows, each its own limit, with the
+    /// duration its name states.
+    fn named_limits(
+        &self,
+        observation: &WindowObservation,
+        facts: &mut Vec<String>,
+    ) -> Vec<QuotaLimit> {
+        NAMED_WINDOWS
+            .into_iter()
+            .filter_map(|(key, minutes)| {
+                let window = self.body.get(key).filter(|window| !window.is_null())?;
+                facts.extend(
+                    Self::unmodeled_keys(window, &NAMED_WINDOW_KEYS)
+                        .into_iter()
+                        .map(|fact| format!("{key}.{fact}")),
+                );
+                Some(QuotaLimit {
+                    quota_limit_identifier: key.to_owned(),
+                    quota_limit_name_option: None,
+                    quota_windows: vec![
+                        WindowReading {
+                            name: key.to_owned(),
+                            scope: None,
+                            used: Self::percent(window.get("utilization")),
+                            reset_basis: Self::reset_basis(window.get("resets_at")),
+                            duration_basis: WindowDurationBasis::ProviderWindowNamed(minutes),
+                            period_semantics: PeriodSemantics::NotEstablished,
+                        }
+                        .normalize_at(observation),
+                    ],
+                })
+            })
+            .collect()
     }
 
-    /// Group the normalized `limits[]` list into limits by provider group.
+    /// The `limits[]` list grouped into limits by provider group. An entry
+    /// carries a reset but no duration; a duration is never inferred from a
+    /// reset shared with a named window.
     fn listed_limits(
         &self,
-        entries: &[Value],
-        observed: i64,
-        unrecognized: &mut Vec<String>,
+        observation: &WindowObservation,
+        facts: &mut Vec<String>,
     ) -> Vec<QuotaLimit> {
         let mut limits: Vec<QuotaLimit> = Vec::new();
+        let entries = self
+            .body
+            .get(LIMITS_KEY)
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten();
         for entry in entries {
             let kind = entry.get("kind").and_then(Value::as_str).unwrap_or("limit");
             let group = entry.get("group").and_then(Value::as_str).unwrap_or(kind);
-            let Some(used) = Self::basis_points(entry.get("percent")) else {
-                unrecognized.push(format!("limits.{kind}"));
-                continue;
-            };
-            let reset = Self::reset_second(entry.get("resets_at"));
+            facts.extend(
+                Self::unmodeled_keys(entry, &LIMIT_ENTRY_KEYS)
+                    .into_iter()
+                    .map(|fact| format!("{LIMITS_KEY}.{kind}.{fact}")),
+            );
             let scope = entry.get("scope");
             let scope_name = scope
                 .and_then(|scope| scope.get("model"))
@@ -266,11 +308,12 @@ impl ClaudeUsageDocument {
             let window = WindowReading {
                 name: kind.to_owned(),
                 scope: scope_name,
-                used_basis_points: used,
-                reset_basis: Self::reset_basis(reset),
-                duration_basis: self.named_duration(group, reset),
+                used: Self::percent(entry.get("percent")),
+                reset_basis: Self::reset_basis(entry.get("resets_at")),
+                duration_basis: WindowDurationBasis::Unknown,
+                period_semantics: PeriodSemantics::NotEstablished,
             }
-            .normalize_at(observed);
+            .normalize_at(observation);
             match limits
                 .iter_mut()
                 .find(|limit| limit.quota_limit_identifier == group)
@@ -286,52 +329,41 @@ impl ClaudeUsageDocument {
         limits
     }
 
-    /// Without `limits[]`, the two named top-level windows stand alone.
-    fn named_limits(&self, observed: i64) -> Vec<QuotaLimit> {
-        [
-            ("five_hour", FIVE_HOUR_MINUTES),
-            ("seven_day", SEVEN_DAY_MINUTES),
-        ]
-        .into_iter()
-        .filter_map(|(key, minutes)| {
-            let window = self.body.get(key)?;
-            let used = Self::basis_points(window.get("utilization"))?;
-            Some(QuotaLimit {
-                quota_limit_identifier: key.to_owned(),
-                quota_limit_name_option: None,
-                quota_windows: vec![
-                    WindowReading {
-                        name: key.to_owned(),
-                        scope: None,
-                        used_basis_points: used,
-                        reset_basis: Self::reset_basis(Self::reset_second(window.get("resets_at"))),
-                        duration_basis: WindowDurationBasis::ProviderWindowNamed(minutes),
-                    }
-                    .normalize_at(observed),
-                ],
-            })
-        })
-        .collect()
+    /// Present top-level keys outside the modelled windows: a window-shaped
+    /// object (one with a `utilization`) is an unrecognized window; anything
+    /// else, including the known auxiliary facts, is an unmodeled fact.
+    fn unrecognized(&self, facts: &mut Vec<String>) -> Vec<String> {
+        let mut windows = Vec::new();
+        let modelled: Vec<&str> = NAMED_WINDOWS
+            .iter()
+            .map(|(key, _)| *key)
+            .chain([LIMITS_KEY])
+            .collect();
+        for key in Self::unmodeled_keys(&self.body, &modelled) {
+            let window_shaped = self
+                .body
+                .get(key)
+                .is_some_and(|value| value.get("utilization").is_some());
+            if window_shaped && !AUXILIARY_KEYS.contains(&key) {
+                windows.push(key.to_owned());
+            } else {
+                facts.push(key.to_owned());
+            }
+        }
+        windows
     }
 }
 
 impl QuotaDocument for ClaudeUsageDocument {
-    fn normalize(&self, instant: ObservationInstant) -> SubscriptionUsage {
-        let observed = instant.seconds();
-        let mut unrecognized: Vec<String> = self
-            .body
-            .as_object()
+    fn normalize(&self, instant: ObservationInstant, zone: &LocalZone) -> SubscriptionUsage {
+        let observation = WindowObservation::new(instant.seconds(), zone.clone());
+        let mut facts = Vec::new();
+        let unrecognized = self.unrecognized(&mut facts);
+        let quota_limits = self
+            .named_limits(&observation, &mut facts)
             .into_iter()
-            .flatten()
-            .filter(|(key, value)| !value.is_null() && !RECOGNIZED_KEYS.contains(&key.as_str()))
-            .map(|(key, _)| key.clone())
+            .chain(self.listed_limits(&observation, &mut facts))
             .collect();
-        let quota_limits = match self.body.get("limits").and_then(Value::as_array) {
-            Some(entries) if !entries.is_empty() => {
-                self.listed_limits(entries, observed, &mut unrecognized)
-            }
-            _ => self.named_limits(observed),
-        };
         SubscriptionUsage {
             usage_provider: UsageProvider::Claude,
             usage_source: UsageSource::ClaudeOauthUsageEndpoint,
@@ -340,6 +372,7 @@ impl QuotaDocument for ClaudeUsageDocument {
             account_homes: Vec::new(),
             quota_limits,
             unrecognized_window_names: unrecognized,
+            unmodeled_source_facts: facts,
         }
     }
 }

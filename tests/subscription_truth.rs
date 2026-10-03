@@ -11,8 +11,7 @@ use harness::{
 };
 use kameo::actor::{ActorRef, Spawn};
 use signal_harness::{
-    HarnessName, HarnessStreamEvent, HarnessTranscriptSequence,
-    HarnessTranscriptSubscriptionIdentifier, HarnessTranscriptToken, TranscriptObservation,
+    HarnessName, HarnessStreamEvent, HarnessTranscriptToken, TranscriptObservation,
 };
 
 struct SubscriptionFixture {
@@ -38,11 +37,11 @@ impl SubscriptionFixture {
     }
 }
 
-fn observation(harness: &str, sequence: u64, line: &str) -> TranscriptObservation {
+fn observation(harness: &str, sequence: i64, line: &str) -> TranscriptObservation {
     TranscriptObservation {
-        harness: HarnessName::new(harness),
-        sequence: HarnessTranscriptSequence::new(sequence),
-        line: line.to_string(),
+        harness_name: HarnessName::from(harness),
+        harness_transcript_sequence: sequence,
+        transcript_line: line.to_string(),
     }
 }
 
@@ -54,7 +53,7 @@ async fn subscription_open_returns_typed_snapshot_with_per_stream_token() {
     let opened = fixture
         .manager
         .ask(OpenTranscriptSubscription {
-            harness: HarnessName::new("designer"),
+            harness: HarnessName::from("designer"),
             sink: sink.clone(),
         })
         .await
@@ -62,17 +61,17 @@ async fn subscription_open_returns_typed_snapshot_with_per_stream_token() {
 
     // The token names the harness and the open subscription; the snapshot
     // carries that token plus the sequence cursor at 0.
-    assert_eq!(opened.token.harness.as_str(), "designer");
-    assert_eq!(opened.token.subscription.into_u64(), 1);
-    assert_eq!(opened.snapshot.token, opened.token);
-    assert_eq!(opened.snapshot.current_sequence.into_u64(), 0);
+    assert_eq!(opened.token.harness_name.as_str(), "designer");
+    assert_eq!(opened.token.harness_transcript_subscription_identifier, 1);
+    assert_eq!(opened.snapshot.harness_transcript_token, opened.token);
+    assert_eq!(opened.snapshot.harness_transcript_sequence, 0);
 
     // The first event the sink received is the snapshot.
     let first = sink.next_delivered().expect("snapshot was delivered");
     match first {
         TranscriptDeliveryEvent::Snapshot(snapshot) => {
-            assert_eq!(snapshot.token, opened.token);
-            assert_eq!(snapshot.current_sequence.into_u64(), 0);
+            assert_eq!(snapshot.harness_transcript_token, opened.token);
+            assert_eq!(snapshot.harness_transcript_sequence, 0);
         }
         other => panic!("expected snapshot, got {other:?}"),
     }
@@ -98,7 +97,7 @@ async fn publisher_fans_typed_deltas_to_open_subscription() {
     let _opened = fixture
         .manager
         .ask(OpenTranscriptSubscription {
-            harness: HarnessName::new("designer"),
+            harness: HarnessName::from("designer"),
             sink: sink.clone(),
         })
         .await
@@ -113,7 +112,11 @@ async fn publisher_fans_typed_deltas_to_open_subscription() {
         let receipt = fixture
             .publisher
             .ask(PublishStreamEvent {
-                event: observation("designer", sequence, &format!("line {sequence}")).into(),
+                event: HarnessStreamEvent::TranscriptObservation(observation(
+                    "designer",
+                    sequence,
+                    &format!("line {sequence}"),
+                )),
             })
             .await
             .expect("publish");
@@ -127,8 +130,8 @@ async fn publisher_fans_typed_deltas_to_open_subscription() {
             Some(TranscriptDeliveryEvent::Delta(HarnessStreamEvent::TranscriptObservation(
                 observation,
             ))) => {
-                assert_eq!(observation.sequence.into_u64(), sequence);
-                assert_eq!(observation.line, format!("line {sequence}"));
+                assert_eq!(observation.harness_transcript_sequence, sequence);
+                assert_eq!(observation.transcript_line, format!("line {sequence}"));
             }
             other => panic!("expected delta at sequence {sequence}, got {other:?}"),
         }
@@ -156,7 +159,7 @@ async fn subscription_close_emits_final_acknowledgement_before_end() {
     let opened = fixture
         .manager
         .ask(OpenTranscriptSubscription {
-            harness: HarnessName::new("operator"),
+            harness: HarnessName::from("operator"),
             sink: sink.clone(),
         })
         .await
@@ -169,7 +172,7 @@ async fn subscription_close_emits_final_acknowledgement_before_end() {
     fixture
         .publisher
         .ask(PublishStreamEvent {
-            event: observation("operator", 1, "first").into(),
+            event: HarnessStreamEvent::TranscriptObservation(observation("operator", 1, "first")),
         })
         .await
         .expect("publish");
@@ -189,7 +192,7 @@ async fn subscription_close_emits_final_acknowledgement_before_end() {
     // acknowledgement carrying the same token.
     match sink.next_delivered() {
         Some(TranscriptDeliveryEvent::FinalAcknowledgement(ack)) => {
-            assert_eq!(ack.token, opened.token);
+            assert_eq!(ack.harness_transcript_token, opened.token);
         }
         other => panic!("expected final ack, got {other:?}"),
     }
@@ -216,7 +219,7 @@ async fn close_after_publish_drops_further_deltas_to_closed_subscription() {
     let opened = fixture
         .manager
         .ask(OpenTranscriptSubscription {
-            harness: HarnessName::new("designer"),
+            harness: HarnessName::from("designer"),
             sink: sink.clone(),
         })
         .await
@@ -229,7 +232,11 @@ async fn close_after_publish_drops_further_deltas_to_closed_subscription() {
     fixture
         .publisher
         .ask(PublishStreamEvent {
-            event: observation("designer", 1, "before-close").into(),
+            event: HarnessStreamEvent::TranscriptObservation(observation(
+                "designer",
+                1,
+                "before-close",
+            )),
         })
         .await
         .expect("publish");
@@ -246,7 +253,11 @@ async fn close_after_publish_drops_further_deltas_to_closed_subscription() {
     let receipt = fixture
         .publisher
         .ask(PublishStreamEvent {
-            event: observation("designer", 2, "after-close").into(),
+            event: HarnessStreamEvent::TranscriptObservation(observation(
+                "designer",
+                2,
+                "after-close",
+            )),
         })
         .await
         .expect("publish");
@@ -281,7 +292,7 @@ async fn slow_subscriber_does_not_block_sibling_subscription() {
     let slow = fixture
         .manager
         .ask(OpenTranscriptSubscription {
-            harness: HarnessName::new("slow"),
+            harness: HarnessName::from("slow"),
             sink: slow_sink.clone(),
         })
         .await
@@ -290,7 +301,7 @@ async fn slow_subscriber_does_not_block_sibling_subscription() {
     let _fast = fixture
         .manager
         .ask(OpenTranscriptSubscription {
-            harness: HarnessName::new("fast"),
+            harness: HarnessName::from("fast"),
             sink: fast_sink.clone(),
         })
         .await
@@ -307,7 +318,11 @@ async fn slow_subscriber_does_not_block_sibling_subscription() {
         let receipt = fixture
             .publisher
             .ask(PublishStreamEvent {
-                event: observation("multi", sequence, &format!("line {sequence}")).into(),
+                event: HarnessStreamEvent::TranscriptObservation(observation(
+                    "multi",
+                    sequence,
+                    &format!("line {sequence}"),
+                )),
             })
             .await
             .expect("publish");
@@ -369,7 +384,7 @@ async fn second_close_for_same_token_is_idempotent_returns_false() {
     let opened = fixture
         .manager
         .ask(OpenTranscriptSubscription {
-            harness: HarnessName::new("designer"),
+            harness: HarnessName::from("designer"),
             sink: sink.clone(),
         })
         .await
@@ -403,8 +418,8 @@ async fn second_close_for_same_token_is_idempotent_returns_false() {
 async fn unknown_token_close_reports_not_found() {
     let fixture = SubscriptionFixture::start().await;
     let phantom = HarnessTranscriptToken {
-        harness: HarnessName::new("phantom"),
-        subscription: HarnessTranscriptSubscriptionIdentifier::new(9000),
+        harness_name: HarnessName::from("phantom"),
+        harness_transcript_subscription_identifier: 9000,
     };
     let receipt = fixture
         .manager

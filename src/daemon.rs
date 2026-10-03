@@ -3,14 +3,15 @@
 //! The uniform daemon skeleton (argv parsing, async task-backed multi-listener
 //! binding, request gating, peer credentials, lifecycle, and the `ExitReport`
 //! entry) is emitted into `src/schema/daemon.rs` by schema-rust's daemon
-//! emitter. Harness adopts the `component_decoded` working tier: the ordinary
-//! harness socket keeps speaking the `signal-harness` contract wire (the
-//! component owns the per-connection `HarnessFrame` decode), and the existing
-//! kameo actors (`Harness`, `TranscriptSubscriptionManager`) stay the engine.
+//! emitter. The ordinary socket speaks `signal-harness`: one `Query` frame in,
+//! `Response` frames out, decoded here. The owner-only meta socket speaks
+//! `meta-signal-harness`. The supervision socket, bound by the engine itself,
+//! speaks the `signal-persona` engine-management lifecycle. Each socket
+//! carries exactly one contract, because a Signal frame names none.
 //!
-//! The owner-only meta listener carries the canonical `meta-signal-harness`
-//! policy contract and falls back to the engine-management supervision
-//! protocol while the component manager still carries both surfaces.
+//! `UsageSnapshotQuery` is answered at daemon scope, before any configured
+//! instance is looked up: it reads the provider sources and live sessions and
+//! needs no harness instance.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -19,36 +20,28 @@ use kameo::actor::{Actor, ActorRef, Spawn};
 use kameo::error::Infallible;
 use kameo::message::{Context, Message};
 use meta_signal_harness::{
-    MetaHarnessFrame, MetaHarnessFrameBody, MetaHarnessReply, MetaHarnessRequest,
-    RequestUnimplemented, UnimplementedReason,
-};
-use signal_frame::{
-    ExchangeIdentifier, ExchangeLane, LaneSequence, NonEmpty, Reply, SessionEpoch,
-    StreamEventIdentifier, SubReply, SubscriptionTokenInner,
+    MetaOperationKind, Query as MetaHarnessRequest, RequestUnimplemented,
+    Response as MetaHarnessReply, UnimplementedReason,
 };
 use signal_harness::{
-    CapabilityProfile, ClaudeSessionIdentifier, ClaudeSessionObservation,
-    CodexContinuationIdentifier, ContinuationHandle, ContinuationRequest, DeliveryCompleted,
-    DeliveryFailed, DeliveryFailureReason, EffortRequest, HarnessDaemonConfiguration, HarnessEvent,
-    HarnessFrame, HarnessFrameBody as FrameBody, HarnessHealth, HarnessInstanceConfiguration,
-    HarnessName, HarnessOperationKind, HarnessReadiness, HarnessRequest,
-    HarnessRequestUnimplemented, HarnessStatus, HarnessStatusQuery, HarnessStreamEvent,
-    HarnessUnimplementedReason, MessageDelivery, ModelResolutionRequest, ModelResolved,
-    ModelSelector, ModelUnavailable, ModelUnavailableReason, NamedModel, PiContinuationIdentifier,
-    TranscriptObservation,
+    CapabilityProfile, ClaudeSessionObservation, ContinuationHandle, ContinuationRequest,
+    DeliveryCompleted, DeliveryFailed, DeliveryFailureReason, EffortRequest,
+    HarnessDaemonConfiguration, HarnessHealth, HarnessInstanceConfiguration, HarnessName,
+    HarnessOperationKind, HarnessReadiness, HarnessRequestUnimplemented, HarnessStatus,
+    HarnessStatusQuery, HarnessStreamEvent, HarnessUnimplementedReason, MessageDelivery,
+    ModelResolutionRequest, ModelResolved, ModelSelector, ModelUnavailable, ModelUnavailableReason,
+    NamedModel, Query as HarnessRequest, Response as HarnessEvent, TranscriptObservation,
 };
-use tokio::io::{AsyncWrite, AsyncWriteExt};
+use tokio::io::AsyncWrite;
 use tokio::sync::OnceCell;
 use tokio::sync::mpsc;
-use triad_runtime::{
-    AcceptedConnection, FrameBody as LengthPrefixedFrameBody, FrameError, LengthPrefixedCodec,
-};
+use triad_runtime::AcceptedConnection;
 
 use crate::launch::SessionLauncher;
 use crate::schema::daemon::ComponentDaemon;
-use crate::supervision::{
-    HandleSupervisionRequest, ReceivedSupervisionRequest, SupervisionPhase, SupervisionProfile,
-};
+use crate::supervision::{SupervisionProfile, SupervisionSocket};
+use crate::usage::{UsageHome, UsageSnapshotReader, UsageSnapshotReading};
+use crate::wire::SignalWire;
 use crate::{
     CloseTranscriptSubscription, OpenTranscriptSubscription, OpenedTranscriptSubscription,
     PublishStreamEvent, TranscriptDeliveryEvent, TranscriptDeltaPublisher,
@@ -67,35 +60,48 @@ use crate::{
 #[derive(Debug)]
 pub struct HarnessProcessDaemon;
 
-/// Harness's daemon-facing engine: the configured harness instances and the
-/// supervision profile. The `component_decoded` runtime shares this engine as
-/// `&Self::Engine`; each instance and the supervision actor own their mutable
-/// state behind a kameo mailbox, so no component-internal lock is required. The
-/// actors start on first connection so `build_runtime` stays synchronous and
-/// they spawn inside the daemon's tokio runtime.
+/// Harness's daemon-facing engine: the configured harness instances, the
+/// session launcher, and the usage reader. The runtime shares this engine as
+/// `&Self::Engine`; each instance owns its mutable state behind a kameo
+/// mailbox, so no component-internal lock is required. The instance actors
+/// start on first connection so `build_runtime` stays synchronous and they
+/// spawn inside the daemon's tokio runtime.
 pub struct HarnessEngine {
     instance_configurations: Vec<HarnessRuntimeConfiguration>,
-    profile: SupervisionProfile,
     session_launcher: SessionLauncher,
+    usage: Option<UsageSnapshotReader>,
     instances: OnceCell<BoundHarnessInstances>,
-    supervision: OnceCell<ActorRef<SupervisionPhase>>,
+    wire: SignalWire,
 }
 
 impl HarnessEngine {
     /// Canonical constructor — every production launch reads a typed
     /// `HarnessDaemonConfiguration` from the daemon's binary rkyv startup file
-    /// and hands the decoded record here.
+    /// and hands the decoded record here. The usage reader reads the daemon
+    /// user's own home.
     pub fn from_configuration(configuration: HarnessDaemonConfiguration) -> Self {
+        Self::new(
+            configuration,
+            UsageHome::from_process().map(UsageSnapshotReader::for_home),
+        )
+    }
+
+    /// An engine whose usage snapshot reads the given reader, or answers every
+    /// provider unavailable when there is none.
+    pub fn new(
+        configuration: HarnessDaemonConfiguration,
+        usage: Option<UsageSnapshotReader>,
+    ) -> Self {
         Self {
             instance_configurations: configuration
-                .harnesses
+                .harness_instance_configurations
                 .into_iter()
                 .map(HarnessRuntimeConfiguration::from_contract)
                 .collect(),
-            profile: SupervisionProfile::harness(),
             session_launcher: SessionLauncher::from_environment(),
+            usage,
             instances: OnceCell::new(),
-            supervision: OnceCell::new(),
+            wire: SignalWire::default(),
         }
     }
 
@@ -105,61 +111,58 @@ impl HarnessEngine {
             .await
     }
 
-    async fn supervision(&self) -> &ActorRef<SupervisionPhase> {
-        self.supervision
-            .get_or_init(|| SupervisionPhase::start(self.profile.clone()))
-            .await
-    }
-
-    /// Serve one ordinary working connection: decode a `signal-harness`
-    /// `HarnessFrame` request off the length-prefixed envelope, route it to the
-    /// addressed harness instance, and write the typed event frame back.
     async fn handle_working_connection(&self, connection: &mut AcceptedConnection) -> Result<()> {
         self.handle_working_stream(connection.stream_mut()).await
     }
 
-    /// Serve one ordinary working stream. Non-stream requests complete with
-    /// one reply frame. `WatchHarnessTranscript` keeps the accepted stream
-    /// attached to the subscription sink so transcript deltas and the final
-    /// retraction acknowledgement ride the original connection.
+    /// Serve one ordinary working stream. A request completes with one
+    /// `Response` frame. `WatchHarnessTranscript` keeps the stream attached to
+    /// the subscription sink, so the snapshot, every stream event and the
+    /// final retraction ride the original connection as `Response` frames.
     pub async fn handle_working_stream(&self, stream: &mut tokio::net::UnixStream) -> Result<()> {
-        let body = LengthPrefixedCodec::default()
-            .read_body_async(stream)
-            .await?
-            .into_bytes();
-        let received = ReceivedHarnessRequest::decode(&body)?;
-        match received.request {
-            HarnessRequest::WatchHarnessTranscript(watch) => {
-                self.handle_transcript_stream(received.exchange, watch, stream)
+        let request: HarnessRequest = self.wire.read_async(stream).await?;
+        match request {
+            HarnessRequest::UsageSnapshotQuery => {
+                let snapshot = self.usage_snapshot().await;
+                self.wire
+                    .write_async(stream, &HarnessEvent::UsageSnapshot(snapshot))
                     .await
+            }
+            HarnessRequest::WatchHarnessTranscript(watch) => {
+                self.handle_transcript_stream(watch, stream).await
             }
             request => {
                 let event = self.event_for_request(request).await?;
-                WorkingHarnessEvent::new(received.exchange, event)
-                    .write(stream)
-                    .await
+                self.wire.write_async(stream, &event).await
             }
         }
     }
 
+    /// One fresh usage snapshot, read off the async runtime because the
+    /// provider reads block.
+    async fn usage_snapshot(&self) -> signal_harness::UsageSnapshot {
+        let reader = self.usage.clone();
+        let read = tokio::task::spawn_blocking(move || match reader {
+            Some(reader) => reader.read_snapshot(),
+            None => UsageSnapshotReader::failed_snapshot(),
+        })
+        .await;
+        read.unwrap_or_else(|_| UsageSnapshotReader::failed_snapshot())
+    }
+
     async fn handle_transcript_stream(
         &self,
-        exchange: ExchangeIdentifier,
         watch: signal_harness::WatchHarnessTranscript,
         stream: &mut tokio::net::UnixStream,
     ) -> Result<()> {
-        let harness = watch.harness.clone();
+        let harness = watch.harness_name.clone();
         let Some(instance) = self.instances().await?.instance(&harness).cloned() else {
-            return WorkingHarnessEvent::new(
-                exchange,
-                Self::unavailable_event(HarnessRequest::WatchHarnessTranscript(watch)),
-            )
-            .write(stream)
-            .await;
+            let event = Self::unavailable_event(HarnessRequest::WatchHarnessTranscript(watch));
+            return self.wire.write_async(stream, &event).await;
         };
         let mut transcript_stream = HarnessTranscriptWireStream::new(harness);
         transcript_stream
-            .open_subscription(exchange, watch, &instance)
+            .open_subscription(watch, &instance)
             .await?;
         transcript_stream.serve(stream, instance).await
     }
@@ -169,22 +172,28 @@ impl HarnessEngine {
         &self,
         observation: TranscriptObservation,
     ) -> Result<TranscriptPublicationReceipt> {
-        let harness = observation.harness.clone();
-        self.publish_stream_event(&harness, observation.into())
-            .await
+        let harness = observation.harness_name.clone();
+        self.publish_stream_event(
+            &harness,
+            HarnessStreamEvent::TranscriptObservation(observation),
+        )
+        .await
     }
 
     /// Push one per-turn Claude session observation onto the addressed
-    /// harness's stream. It rides the same `HarnessTranscriptStream` as
-    /// transcript lines — the Mentci live view renders it, and orchestrate's
-    /// session store later consumes the same pushed event.
+    /// harness's stream. It rides the same transcript stream as transcript
+    /// lines — the Mentci live view renders it, and orchestrate's session
+    /// store later consumes the same pushed event.
     pub async fn publish_claude_session_observation(
         &self,
         observation: ClaudeSessionObservation,
     ) -> Result<TranscriptPublicationReceipt> {
-        let harness = observation.harness.clone();
-        self.publish_stream_event(&harness, observation.into())
-            .await
+        let harness = observation.harness_name.clone();
+        self.publish_stream_event(
+            &harness,
+            HarnessStreamEvent::ClaudeSessionObservation(observation),
+        )
+        .await
     }
 
     async fn publish_stream_event(
@@ -205,7 +214,9 @@ impl HarnessEngine {
     }
 
     async fn event_for_request(&self, request: HarnessRequest) -> Result<HarnessEvent> {
-        let harness = HarnessRequestHandler::request_harness(&request);
+        let Some(harness) = request.addressed_harness() else {
+            return Ok(Self::unavailable_event(request));
+        };
         match self.instances().await?.instance(&harness) {
             Some(instance) => instance
                 .ask(HandleHarnessRequest { request })
@@ -217,71 +228,41 @@ impl HarnessEngine {
 
     fn unavailable_event(request: HarnessRequest) -> HarnessEvent {
         match request {
-            HarnessRequest::MessageDelivery(delivery) => DeliveryFailed {
-                harness: delivery.harness,
-                message_slot: delivery.message_slot,
-                reason: DeliveryFailureReason::HarnessUnavailable,
+            HarnessRequest::MessageDelivery(delivery) => {
+                HarnessEvent::DeliveryFailed(DeliveryFailed {
+                    harness_name: delivery.harness_name,
+                    message_slot: delivery.message_slot,
+                    delivery_failure_reason: DeliveryFailureReason::HarnessUnavailable,
+                })
             }
-            .into(),
-            HarnessRequest::HarnessStatusQuery(query) => HarnessStatus {
-                harness: query.harness,
-                health: HarnessHealth::Stopped,
-                readiness: HarnessReadiness::Unavailable,
+            HarnessRequest::HarnessStatusQuery(query) => {
+                HarnessEvent::HarnessStatus(HarnessStatus {
+                    harness_name: query.harness_name,
+                    harness_health: HarnessHealth::Stopped,
+                    harness_readiness: HarnessReadiness::Unavailable,
+                })
             }
-            .into(),
-            other => HarnessRequestUnimplemented {
-                harness: HarnessRequestHandler::request_harness(&other),
-                operation: other.operation_kind(),
-                reason: HarnessUnimplementedReason::NotBuiltYet,
+            other => {
+                let harness = other.addressed_harness().unwrap_or_default();
+                HarnessRequestHandler::unimplemented(&other, harness)
             }
-            .into(),
         }
     }
 
-    /// Serve one owner-only meta connection. The canonical meta contract is
-    /// `meta-signal-harness`; the older engine-management supervision protocol
-    /// still falls through here while the component manager carries both
-    /// surfaces during the daemon-shell migration.
+    /// Serve one owner-only meta connection: one `meta-signal-harness` `Query`
+    /// frame in, one `Response` frame out.
     async fn handle_meta_connection(&self, connection: &mut AcceptedConnection) -> Result<()> {
-        let body = LengthPrefixedCodec::default()
-            .read_body_async(connection.stream_mut())
-            .await?
-            .into_bytes();
-        match ReceivedMetaHarnessRequest::decode(&body) {
-            Ok(received) => {
-                let reply = self.reply_for_meta_request(received.request).await?;
-                return WorkingMetaHarnessReply::new(received.exchange, reply)
-                    .write(connection.stream_mut())
-                    .await;
-            }
-            Err(MetaHarnessDecode::NotMeta) => {}
-            Err(MetaHarnessDecode::UnexpectedFrame(got)) => {
-                return Err(Error::UnexpectedSignalFrame { got });
-            }
-        }
-        let received = ReceivedSupervisionRequest::decode(&body)?;
-        let reply = self
-            .supervision()
-            .await
-            .ask(HandleSupervisionRequest {
-                request: received.request,
-            })
-            .await
-            .map_err(|error| Error::ActorCall(error.to_string()))?;
-        WorkingSupervisionReply::new(received.exchange, reply.reply)
-            .write(connection.stream_mut())
-            .await
+        let request: MetaHarnessRequest = self.wire.read_async(connection.stream_mut()).await?;
+        let reply = self.reply_for_meta_request(request);
+        self.wire.write_async(connection.stream_mut(), &reply).await
     }
 
-    async fn reply_for_meta_request(
-        &self,
-        request: MetaHarnessRequest,
-    ) -> Result<MetaHarnessReply> {
-        let reply = match request {
-            MetaHarnessRequest::Configure(configuration) => {
+    fn reply_for_meta_request(&self, request: MetaHarnessRequest) -> MetaHarnessReply {
+        match request {
+            MetaHarnessRequest::Configure(_) => {
                 MetaHarnessReply::RequestUnimplemented(RequestUnimplemented {
-                    operation: MetaHarnessRequest::Configure(configuration).kind(),
-                    reason: UnimplementedReason::NotBuiltYet,
+                    meta_operation_kind: MetaOperationKind::ConfigureDaemon,
+                    unimplemented_reason: UnimplementedReason::NotBuiltYet,
                 })
             }
             MetaHarnessRequest::ResolveModel(request) => {
@@ -289,8 +270,7 @@ impl HarnessEngine {
                     .reply_for_request(request)
             }
             MetaHarnessRequest::LaunchSession(request) => self.session_launcher.launch(request),
-        };
-        Ok(reply)
+        }
     }
 }
 
@@ -308,9 +288,18 @@ impl ComponentDaemon for HarnessProcessDaemon {
         Configuration::from_binary_path(path)
     }
 
+    /// Build the engine and bind the supervision socket beside the ordinary
+    /// and meta listeners the shell binds. The shell calls this inside its
+    /// tokio runtime, so the supervision listener runs as a task of it.
     fn build_runtime(
         configuration: &Self::Configuration,
     ) -> std::result::Result<Self::Engine, Self::Error> {
+        let supervision = SupervisionSocket::new(
+            configuration.supervision_socket_path(),
+            configuration.supervision_socket_mode(),
+        )
+        .bind(SupervisionProfile::harness())?;
+        let _supervision = tokio::spawn(supervision.serve());
         Ok(HarnessEngine::from_configuration(
             configuration.raw().clone(),
         ))
@@ -331,68 +320,36 @@ impl ComponentDaemon for HarnessProcessDaemon {
     }
 }
 
-/// One decoded meta-harness request plus its exchange identifier.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReceivedMetaHarnessRequest {
-    exchange: ExchangeIdentifier,
-    request: MetaHarnessRequest,
+/// The harness instance a request addresses; a daemon-scope request
+/// addresses none.
+pub trait AddressedHarness {
+    fn addressed_harness(&self) -> Option<HarnessName>;
+    fn operation_kind(&self) -> HarnessOperationKind;
 }
 
-impl ReceivedMetaHarnessRequest {
-    pub fn decode(body: &[u8]) -> std::result::Result<Self, MetaHarnessDecode> {
-        let frame = MetaHarnessFrame::decode(body).map_err(|_| MetaHarnessDecode::NotMeta)?;
-        match frame.into_body() {
-            MetaHarnessFrameBody::Request { exchange, request } => {
-                let (request, tail) = request.payloads.into_head_and_tail();
-                if !tail.is_empty() {
-                    return Err(MetaHarnessDecode::UnexpectedFrame(format!(
-                        "expected one meta-harness payload, got {}",
-                        tail.len() + 1
-                    )));
-                }
-                Ok(Self { exchange, request })
-            }
-            other => Err(MetaHarnessDecode::UnexpectedFrame(format!("{other:?}"))),
+impl AddressedHarness for HarnessRequest {
+    fn addressed_harness(&self) -> Option<HarnessName> {
+        match self {
+            HarnessRequest::MessageDelivery(payload) => Some(payload.harness_name.clone()),
+            HarnessRequest::InteractionPrompt(payload) => Some(payload.harness_name.clone()),
+            HarnessRequest::DeliveryCancellation(payload) => Some(payload.harness_name.clone()),
+            HarnessRequest::HarnessStatusQuery(payload) => Some(payload.harness_name.clone()),
+            HarnessRequest::WatchHarnessTranscript(payload) => Some(payload.harness_name.clone()),
+            HarnessRequest::UnwatchHarnessTranscript(token) => Some(token.harness_name.clone()),
+            HarnessRequest::UsageSnapshotQuery => None,
         }
     }
 
-    pub fn exchange(&self) -> ExchangeIdentifier {
-        self.exchange
-    }
-
-    pub fn request(&self) -> &MetaHarnessRequest {
-        &self.request
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MetaHarnessDecode {
-    NotMeta,
-    UnexpectedFrame(String),
-}
-
-/// One meta-harness reply, framed and written back to the owner client.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WorkingMetaHarnessReply {
-    exchange: ExchangeIdentifier,
-    reply: MetaHarnessReply,
-}
-
-impl WorkingMetaHarnessReply {
-    pub fn new(exchange: ExchangeIdentifier, reply: MetaHarnessReply) -> Self {
-        Self { exchange, reply }
-    }
-
-    async fn write(self, stream: &mut tokio::net::UnixStream) -> Result<()> {
-        let frame = MetaHarnessFrame::new(MetaHarnessFrameBody::Reply {
-            exchange: self.exchange,
-            reply: Reply::committed(NonEmpty::single(SubReply::Ok(self.reply))),
-        });
-        LengthPrefixedCodec::default()
-            .write_body_async(stream, &LengthPrefixedFrameBody::new(frame.encode()?))
-            .await?;
-        stream.flush().await.map_err(FrameError::from)?;
-        Ok(())
+    fn operation_kind(&self) -> HarnessOperationKind {
+        match self {
+            HarnessRequest::MessageDelivery(_) => HarnessOperationKind::DeliverMessage,
+            HarnessRequest::InteractionPrompt(_) => HarnessOperationKind::PromptInteraction,
+            HarnessRequest::DeliveryCancellation(_) => HarnessOperationKind::CancelDelivery,
+            HarnessRequest::HarnessStatusQuery(_) => HarnessOperationKind::QueryHarnessStatus,
+            HarnessRequest::WatchHarnessTranscript(_) => HarnessOperationKind::WatchTranscript,
+            HarnessRequest::UnwatchHarnessTranscript(_) => HarnessOperationKind::UnwatchTranscript,
+            HarnessRequest::UsageSnapshotQuery => HarnessOperationKind::ReadUsageSnapshot,
+        }
     }
 }
 
@@ -420,22 +377,25 @@ impl HarnessRuntimeConfiguration {
     pub fn from_contract(configuration: HarnessInstanceConfiguration) -> Self {
         let harness_name = configuration.harness_name.clone();
         let terminal_endpoint = configuration
-            .terminal_socket_path
+            .terminal_socket_path_option
             .map(|path| HarnessTerminalEndpoint::pty_socket(path.as_str()));
-        let pi_rpc_configuration = configuration.pi_rpc_adapter.map(|adapter| {
-            let process_configuration = PiRpcProcessConfiguration::new(
-                adapter.command_path.as_str(),
-                adapter.session_directory_path.as_str(),
-            )
-            .with_session_name(harness_name.as_str())
-            .with_delivery_command(adapter.delivery_mode.into());
-            match adapter.model_pattern {
-                Some(model_pattern) => {
-                    process_configuration.with_model_pattern(model_pattern.as_str())
-                }
-                None => process_configuration,
-            }
-        });
+        let pi_rpc_configuration =
+            configuration
+                .pi_rpc_jsonl_adapter_configuration_option
+                .map(|adapter| {
+                    let process_configuration = PiRpcProcessConfiguration::new(
+                        adapter.pi_rpc_command_path.as_str(),
+                        adapter.pi_rpc_session_directory_path.as_str(),
+                    )
+                    .with_session_name(harness_name.as_str())
+                    .with_delivery_command(adapter.pi_rpc_delivery_mode.into());
+                    match adapter.pi_rpc_model_pattern_option {
+                        Some(model_pattern) => {
+                            process_configuration.with_model_pattern(model_pattern.as_str())
+                        }
+                        None => process_configuration,
+                    }
+                });
         Self {
             harness: configuration.harness_name,
             kind: HarnessKind::from_contract(configuration.harness_kind),
@@ -521,7 +481,10 @@ impl<'a> ModelResolutionCatalog<'a> {
     fn reply_for_request(&self, request: ModelResolutionRequest) -> MetaHarnessReply {
         match self.resolved_model(&request) {
             Ok(resolved) => MetaHarnessReply::ModelResolved(resolved),
-            Err(reason) => MetaHarnessReply::ModelUnavailable(ModelUnavailable { request, reason }),
+            Err(reason) => MetaHarnessReply::ModelUnavailable(ModelUnavailable {
+                model_resolution_request: request,
+                model_unavailable_reason: reason,
+            }),
         }
     }
 
@@ -532,12 +495,12 @@ impl<'a> ModelResolutionCatalog<'a> {
         if self.configurations.is_empty() {
             return Err(ModelUnavailableReason::NoConfiguredHarness);
         }
-        let mut failures = ExhaustedModelResolution::new(&request.model.selector);
+        let mut failures = ExhaustedModelResolution::new(&request.model_request.model_selector);
         for selection in self
             .configurations
             .iter()
             .map(HarnessRuntimeConfiguration::resolver_adapter)
-            .filter_map(|adapter| adapter.selection_for_model_request(&request.model))
+            .filter_map(|adapter| adapter.selection_for_model_request(&request.model_request))
         {
             match selection.resolved_model(request) {
                 Ok(resolved) => return Ok(resolved),
@@ -614,22 +577,27 @@ impl<'a> ModelResolutionSelection<'a> {
         self,
         request: &ModelResolutionRequest,
     ) -> std::result::Result<ModelResolved, ModelUnavailableReason> {
-        if !self.adapter.supports_effort(request.model.effort) {
+        if !self
+            .adapter
+            .supports_effort(&request.model_request.effort_request)
+        {
             return Err(ModelUnavailableReason::EffortUnsupported);
         }
         if !self.adapter.has_required_runtime_adapter() {
             return Err(ModelUnavailableReason::AdapterConfigurationMissing);
         }
-        let Some(continuation) = self.adapter.continuation_for_request(&request.continuation)
+        let Some(continuation) = self
+            .adapter
+            .continuation_for_request(&request.continuation_request)
         else {
             return Err(ModelUnavailableReason::ContinuationUnavailable);
         };
         Ok(ModelResolved {
-            harness: self.adapter.harness().clone(),
+            harness_name: self.adapter.harness().clone(),
             harness_kind: self.adapter.contract_kind(),
-            model: self.model,
-            effort: request.model.effort,
-            continuation,
+            named_model: self.model,
+            effort_request: request.model_request.effort_request.clone(),
+            continuation_handle: continuation,
         })
     }
 }
@@ -656,7 +624,7 @@ impl<'a> ConfiguredResolverAdapter<'a> {
         self,
         request: &signal_harness::ModelRequest,
     ) -> Option<ModelResolutionSelection<'a>> {
-        let model = match &request.selector {
+        let model = match &request.model_selector {
             ModelSelector::Exact(model) => self.exact_model(model)?,
             ModelSelector::CapabilityProfile(profile) => self.model_for_profile(profile)?,
         };
@@ -676,7 +644,7 @@ impl<'a> ConfiguredResolverAdapter<'a> {
                 .as_ref()?
                 .model_pattern()
                 .filter(|model| *model == requested.as_str())
-                .map(NamedModel::new),
+                .map(NamedModel::from),
             HarnessKind::Fixture => None,
         }
     }
@@ -694,15 +662,15 @@ impl<'a> ConfiguredResolverAdapter<'a> {
                         .pi_rpc_configuration
                         .as_ref()
                         .and_then(PiRpcProcessConfiguration::model_pattern)
-                        .map(NamedModel::new)
-                        .unwrap_or_else(|| NamedModel::new(requested.as_str())),
+                        .map(NamedModel::from)
+                        .unwrap_or_else(|| requested.clone()),
                 )
             }
             HarnessKind::Fixture => None,
         }
     }
 
-    fn supports_effort(&self, effort: EffortRequest) -> bool {
+    fn supports_effort(&self, effort: &EffortRequest) -> bool {
         match &self.configuration.kind {
             HarnessKind::Codex | HarnessKind::Claude => true,
             HarnessKind::Pi => matches!(
@@ -742,20 +710,14 @@ impl<'a> ConfiguredResolverAdapter<'a> {
 
     fn fresh_continuation(&self) -> Option<ContinuationHandle> {
         match &self.configuration.kind {
-            HarnessKind::Codex => Some(ContinuationHandle::Codex(
-                CodexContinuationIdentifier::new(self.harness().as_str()),
-            )),
-            HarnessKind::Claude => Some(ContinuationHandle::Claude(ClaudeSessionIdentifier::new(
-                self.harness().as_str(),
-            ))),
+            HarnessKind::Codex => Some(ContinuationHandle::Codex(self.harness().clone())),
+            HarnessKind::Claude => Some(ContinuationHandle::Claude(self.harness().clone())),
             HarnessKind::Pi => {
                 self.configuration
                     .pi_rpc_configuration
                     .as_ref()
                     .map(|configuration| {
-                        ContinuationHandle::Pi(PiContinuationIdentifier::new(
-                            configuration.session_name(),
-                        ))
+                        ContinuationHandle::Pi(configuration.session_name().to_owned())
                     })
             }
             HarnessKind::Fixture => None,
@@ -828,7 +790,7 @@ impl ProviderModelNamespace {
 
     fn model_for_profile(&self, requested: &CapabilityProfile) -> Option<NamedModel> {
         self.profile_matches(requested)
-            .then(|| NamedModel::new(self.default_model))
+            .then(|| NamedModel::from(self.default_model))
     }
 
     fn profile_matches(&self, requested: &CapabilityProfile) -> bool {
@@ -969,7 +931,7 @@ impl Message<OpenHarnessTranscriptStream> for HarnessInstance {
         let subscription_manager = self.subscription_manager.clone();
         subscription_manager
             .ask(OpenTranscriptSubscription {
-                harness: message.watch.harness,
+                harness: message.watch.harness_name,
                 sink: message.sink,
             })
             .await
@@ -1034,80 +996,12 @@ impl Message<PublishHarnessStreamEvent> for HarnessInstance {
     }
 }
 
-/// One decoded ordinary harness request plus its exchange identifier.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReceivedHarnessRequest {
-    exchange: ExchangeIdentifier,
-    request: HarnessRequest,
-}
-
-impl ReceivedHarnessRequest {
-    pub fn decode(body: &[u8]) -> Result<Self> {
-        match HarnessFrame::decode(body)?.into_body() {
-            FrameBody::Request { exchange, request } => {
-                let (request, tail) = request.payloads.into_head_and_tail();
-                if !tail.is_empty() {
-                    return Err(Error::UnexpectedSignalFrame {
-                        got: format!("expected one harness payload, got {}", tail.len() + 1),
-                    });
-                }
-                Ok(Self { exchange, request })
-            }
-            other => Err(Error::UnexpectedSignalFrame {
-                got: format!("{other:?}"),
-            }),
-        }
-    }
-
-    pub fn exchange(&self) -> ExchangeIdentifier {
-        self.exchange
-    }
-
-    pub fn request(&self) -> &HarnessRequest {
-        &self.request
-    }
-}
-
-/// One ordinary harness event, framed and written back to the caller.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WorkingHarnessEvent {
-    exchange: ExchangeIdentifier,
-    event: HarnessEvent,
-}
-
-impl WorkingHarnessEvent {
-    pub fn new(exchange: ExchangeIdentifier, event: HarnessEvent) -> Self {
-        Self { exchange, event }
-    }
-
-    async fn write<Writer>(self, stream: &mut Writer) -> Result<()>
-    where
-        Writer: AsyncWrite + Unpin,
-    {
-        let frame = HarnessFrame::new(FrameBody::Reply {
-            exchange: self.exchange,
-            reply: Reply::committed(NonEmpty::single(SubReply::Ok(self.event))),
-        });
-        LengthPrefixedCodec::default()
-            .write_body_async(stream, &LengthPrefixedFrameBody::new(frame.encode()?))
-            .await?;
-        stream.flush().await.map_err(FrameError::from)?;
-        Ok(())
-    }
-}
-
 struct HarnessTranscriptWireStream {
     bound_harness: HarnessName,
     sender: mpsc::UnboundedSender<TranscriptWireDelivery>,
     receiver: mpsc::UnboundedReceiver<TranscriptWireDelivery>,
-    subscriptions: Vec<HarnessTranscriptWireSubscription>,
-    next_event_sequence: LaneSequence,
-}
-
-struct HarnessTranscriptWireSubscription {
-    token: signal_harness::HarnessTranscriptToken,
-    watch_exchange: ExchangeIdentifier,
-    close_exchange: Option<ExchangeIdentifier>,
+    subscriptions: Vec<signal_harness::HarnessTranscriptToken>,
+    wire: SignalWire,
 }
 
 struct TranscriptWireDelivery {
@@ -1119,17 +1013,23 @@ impl TranscriptWireDelivery {
     fn final_ack(&self) -> bool {
         matches!(self.event, TranscriptDeliveryEvent::FinalAcknowledgement(_))
     }
-}
 
-impl HarnessTranscriptWireSubscription {
-    fn new(
-        token: signal_harness::HarnessTranscriptToken,
-        watch_exchange: ExchangeIdentifier,
-    ) -> Self {
-        Self {
-            token,
-            watch_exchange,
-            close_exchange: None,
+    /// The `Response` frame this delivery rides the wire as; a stream event
+    /// carries the token of the subscription it belongs to.
+    fn into_response(self) -> HarnessEvent {
+        match self.event {
+            TranscriptDeliveryEvent::Snapshot(snapshot) => {
+                HarnessEvent::HarnessTranscriptSnapshot(snapshot)
+            }
+            TranscriptDeliveryEvent::Delta(event) => {
+                HarnessEvent::HarnessTranscriptEvent(signal_harness::HarnessTranscriptEvent {
+                    harness_transcript_token: self.token,
+                    harness_stream_event: event,
+                })
+            }
+            TranscriptDeliveryEvent::FinalAcknowledgement(acknowledgement) => {
+                HarnessEvent::HarnessSubscriptionRetracted(acknowledgement)
+            }
         }
     }
 }
@@ -1173,13 +1073,12 @@ impl HarnessTranscriptWireStream {
             sender,
             receiver,
             subscriptions: Vec::new(),
-            next_event_sequence: LaneSequence::first(),
+            wire: SignalWire::default(),
         }
     }
 
     async fn open_subscription(
         &mut self,
-        exchange: ExchangeIdentifier,
         watch: signal_harness::WatchHarnessTranscript,
         instance: &ActorRef<HarnessInstance>,
     ) -> Result<()> {
@@ -1190,67 +1089,33 @@ impl HarnessTranscriptWireStream {
             .await
             .map_err(|error| Error::ActorCall(error.to_string()))?;
         let token = opened.token.clone();
-        self.subscriptions
-            .push(HarnessTranscriptWireSubscription::new(
-                token.clone(),
-                exchange,
-            ));
+        self.subscriptions.push(token.clone());
         TranscriptDeliveryForwarder::new(self.sender.clone()).spawn(token, receiver);
         Ok(())
     }
 
-    fn subscription(
-        &self,
-        token: &signal_harness::HarnessTranscriptToken,
-    ) -> Option<&HarnessTranscriptWireSubscription> {
-        self.subscriptions
-            .iter()
-            .find(|subscription| subscription.token == *token)
-    }
-
-    fn subscription_mut(
-        &mut self,
-        token: &signal_harness::HarnessTranscriptToken,
-    ) -> Option<&mut HarnessTranscriptWireSubscription> {
-        self.subscriptions
-            .iter_mut()
-            .find(|subscription| subscription.token == *token)
+    fn holds(&self, token: &signal_harness::HarnessTranscriptToken) -> bool {
+        self.subscriptions.contains(token)
     }
 
     fn remove_subscription(&mut self, token: &signal_harness::HarnessTranscriptToken) {
-        self.subscriptions
-            .retain(|subscription| subscription.token != *token);
-    }
-
-    fn tokens(&self) -> Vec<signal_harness::HarnessTranscriptToken> {
-        self.subscriptions
-            .iter()
-            .map(|subscription| subscription.token.clone())
-            .collect()
+        self.subscriptions.retain(|held| held != token);
     }
 
     fn unknown_unwatch_event(token: signal_harness::HarnessTranscriptToken) -> HarnessEvent {
-        HarnessRequestUnimplemented {
-            harness: token.harness,
-            operation: HarnessOperationKind::UnwatchHarnessTranscript,
-            reason: HarnessUnimplementedReason::NotBuiltYet,
-        }
-        .into()
+        HarnessEvent::HarnessRequestUnimplemented(HarnessRequestUnimplemented {
+            harness_name: token.harness_name,
+            harness_operation_kind: HarnessOperationKind::UnwatchTranscript,
+            harness_unimplemented_reason: HarnessUnimplementedReason::NotBuiltYet,
+        })
     }
 
     fn cross_harness_watch_event(watch: signal_harness::WatchHarnessTranscript) -> HarnessEvent {
-        HarnessRequestUnimplemented {
-            harness: watch.harness,
-            operation: HarnessOperationKind::WatchHarnessTranscript,
-            reason: HarnessUnimplementedReason::NotBuiltYet,
-        }
-        .into()
-    }
-
-    fn subscription_token_inner(
-        token: &signal_harness::HarnessTranscriptToken,
-    ) -> SubscriptionTokenInner {
-        SubscriptionTokenInner::new(token.subscription.into_u64())
+        HarnessEvent::HarnessRequestUnimplemented(HarnessRequestUnimplemented {
+            harness_name: watch.harness_name,
+            harness_operation_kind: HarnessOperationKind::WatchTranscript,
+            harness_unimplemented_reason: HarnessUnimplementedReason::NotBuiltYet,
+        })
     }
 
     async fn serve(
@@ -1259,7 +1124,6 @@ impl HarnessTranscriptWireStream {
         instance: ActorRef<HarnessInstance>,
     ) -> Result<()> {
         let (mut reader, mut writer) = tokio::io::split(stream);
-        let codec = LengthPrefixedCodec::default();
         loop {
             tokio::select! {
                 event = self.receiver.recv() => {
@@ -1268,7 +1132,7 @@ impl HarnessTranscriptWireStream {
                     };
                     let final_ack = delivery.final_ack();
                     let token = delivery.token.clone();
-                    if let Err(error) = self.write_delivery_event(&mut writer, delivery).await {
+                    if let Err(error) = self.wire.write_async(&mut writer, &delivery.into_response()).await {
                         self.close_after_stream_error(&instance).await;
                         return Err(error);
                     }
@@ -1279,16 +1143,15 @@ impl HarnessTranscriptWireStream {
                         }
                     }
                 }
-                body = codec.read_body_async(&mut reader) => {
-                    let body = match body {
-                        Ok(body) => body.into_bytes(),
+                request = self.wire.read_async::<HarnessRequest>(&mut reader) => {
+                    let request = match request {
+                        Ok(request) => request,
                         Err(error) => {
                             self.close_after_stream_error(&instance).await;
-                            return Err(error.into());
+                            return Err(error);
                         }
                     };
-                    let received = ReceivedHarnessRequest::decode(&body)?;
-                    if let Err(error) = self.handle_request(received, &instance, &mut writer).await {
+                    if let Err(error) = self.handle_request(request, &instance, &mut writer).await {
                         self.close_after_stream_error(&instance).await;
                         return Err(error);
                     }
@@ -1299,20 +1162,15 @@ impl HarnessTranscriptWireStream {
 
     async fn handle_request<Writer>(
         &mut self,
-        received: ReceivedHarnessRequest,
+        request: HarnessRequest,
         instance: &ActorRef<HarnessInstance>,
         writer: &mut Writer,
     ) -> Result<()>
     where
-        Writer: AsyncWrite + Unpin,
+        Writer: AsyncWrite + Unpin + Send,
     {
-        match received.request {
-            HarnessRequest::UnwatchHarnessTranscript(token)
-                if self.subscription(&token).is_some() =>
-            {
-                if let Some(subscription) = self.subscription_mut(&token) {
-                    subscription.close_exchange = Some(received.exchange);
-                }
+        match request {
+            HarnessRequest::UnwatchHarnessTranscript(token) if self.holds(&token) => {
                 instance
                     .ask(CloseHarnessTranscriptStream { token })
                     .await
@@ -1320,142 +1178,41 @@ impl HarnessTranscriptWireStream {
                 Ok(())
             }
             HarnessRequest::UnwatchHarnessTranscript(token) => {
-                WorkingHarnessEvent::new(received.exchange, Self::unknown_unwatch_event(token))
-                    .write(writer)
+                self.wire
+                    .write_async(writer, &Self::unknown_unwatch_event(token))
                     .await
             }
             HarnessRequest::WatchHarnessTranscript(watch)
-                if watch.harness != self.bound_harness =>
+                if watch.harness_name != self.bound_harness =>
             {
-                WorkingHarnessEvent::new(received.exchange, Self::cross_harness_watch_event(watch))
-                    .write(writer)
+                self.wire
+                    .write_async(writer, &Self::cross_harness_watch_event(watch))
                     .await
             }
             HarnessRequest::WatchHarnessTranscript(watch) => {
-                self.open_subscription(received.exchange, watch, instance)
-                    .await
+                self.open_subscription(watch, instance).await
+            }
+            HarnessRequest::UsageSnapshotQuery => {
+                let event = HarnessRequestHandler::unimplemented(
+                    &HarnessRequest::UsageSnapshotQuery,
+                    self.bound_harness.clone(),
+                );
+                self.wire.write_async(writer, &event).await
             }
             request => {
                 let event = instance
                     .ask(HandleHarnessRequest { request })
                     .await
                     .map_err(|error| Error::ActorCall(error.to_string()))?;
-                WorkingHarnessEvent::new(received.exchange, event)
-                    .write(writer)
-                    .await
+                self.wire.write_async(writer, &event).await
             }
         }
-    }
-
-    async fn write_delivery_event<Writer>(
-        &mut self,
-        writer: &mut Writer,
-        delivery: TranscriptWireDelivery,
-    ) -> Result<()>
-    where
-        Writer: AsyncWrite + Unpin,
-    {
-        match delivery.event {
-            TranscriptDeliveryEvent::Snapshot(snapshot) => {
-                let exchange = self
-                    .subscription(&delivery.token)
-                    .map(|subscription| subscription.watch_exchange)
-                    .ok_or_else(|| Error::UnexpectedSignalFrame {
-                        got: "transcript snapshot did not match an open wire subscription"
-                            .to_string(),
-                    })?;
-                WorkingHarnessEvent::new(exchange, snapshot.into())
-                    .write(writer)
-                    .await
-            }
-            TranscriptDeliveryEvent::Delta(event) => {
-                self.write_stream_event(writer, &delivery.token, event)
-                    .await
-            }
-            TranscriptDeliveryEvent::FinalAcknowledgement(acknowledgement) => {
-                let exchange = self
-                    .subscription(&delivery.token)
-                    .map(|subscription| {
-                        subscription
-                            .close_exchange
-                            .unwrap_or(subscription.watch_exchange)
-                    })
-                    .ok_or_else(|| Error::UnexpectedSignalFrame {
-                        got: "transcript final ack did not match an open wire subscription"
-                            .to_string(),
-                    })?;
-                WorkingHarnessEvent::new(exchange, acknowledgement.into())
-                    .write(writer)
-                    .await
-            }
-        }
-    }
-
-    async fn write_stream_event<Writer>(
-        &mut self,
-        writer: &mut Writer,
-        token: &signal_harness::HarnessTranscriptToken,
-        event: HarnessStreamEvent,
-    ) -> Result<()>
-    where
-        Writer: AsyncWrite + Unpin,
-    {
-        let frame = HarnessFrame::new(FrameBody::SubscriptionEvent {
-            event_identifier: self.next_stream_event_identifier(),
-            token: Self::subscription_token_inner(token),
-            event,
-        });
-        LengthPrefixedCodec::default()
-            .write_body_async(writer, &LengthPrefixedFrameBody::new(frame.encode()?))
-            .await?;
-        writer.flush().await.map_err(FrameError::from)?;
-        Ok(())
-    }
-
-    fn next_stream_event_identifier(&mut self) -> StreamEventIdentifier {
-        let session_epoch = self
-            .subscriptions
-            .first()
-            .map(|subscription| subscription.watch_exchange.session_epoch)
-            .unwrap_or_else(|| SessionEpoch::new(0));
-        let identifier = StreamEventIdentifier::new(
-            session_epoch,
-            ExchangeLane::Acceptor,
-            self.next_event_sequence,
-        );
-        self.next_event_sequence = self.next_event_sequence.next();
-        identifier
     }
 
     async fn close_after_stream_error(&self, instance: &ActorRef<HarnessInstance>) {
-        for token in self.tokens() {
+        for token in self.subscriptions.clone() {
             let _ = instance.ask(CloseHarnessTranscriptStream { token }).await;
         }
-    }
-}
-
-/// One supervision reply, framed and written back to the manager.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WorkingSupervisionReply {
-    exchange: ExchangeIdentifier,
-    reply: signal_persona::Reply,
-}
-
-impl WorkingSupervisionReply {
-    pub fn new(exchange: ExchangeIdentifier, reply: signal_persona::Reply) -> Self {
-        Self { exchange, reply }
-    }
-
-    async fn write(self, stream: &mut tokio::net::UnixStream) -> Result<()> {
-        let frame = signal_persona::Frame::new(signal_persona::FrameBody::Reply {
-            exchange: self.exchange,
-            reply: Reply::committed(NonEmpty::single(SubReply::Ok(self.reply))),
-        });
-        LengthPrefixedCodec::default()
-            .write_body_async(stream, &LengthPrefixedFrameBody::new(frame.encode()?))
-            .await?;
-        stream.flush().await.map_err(FrameError::from)?;
-        Ok(())
     }
 }
 
@@ -1496,13 +1253,20 @@ impl HarnessRequestHandler {
             HarnessRequest::UnwatchHarnessTranscript(token) => {
                 self.unwatch_transcript_event(token).await
             }
-            other => Ok(HarnessRequestUnimplemented {
-                harness: Self::request_harness(&other),
-                operation: other.operation_kind(),
-                reason: HarnessUnimplementedReason::NotBuiltYet,
+            other => {
+                let harness = other.addressed_harness().unwrap_or_default();
+                Ok(Self::unimplemented(&other, harness))
             }
-            .into()),
         }
+    }
+
+    /// The typed reply for a request whose runtime path is not built.
+    pub fn unimplemented(request: &HarnessRequest, harness: HarnessName) -> HarnessEvent {
+        HarnessEvent::HarnessRequestUnimplemented(HarnessRequestUnimplemented {
+            harness_name: harness,
+            harness_operation_kind: request.operation_kind(),
+            harness_unimplemented_reason: HarnessUnimplementedReason::NotBuiltYet,
+        })
     }
 
     async fn watch_transcript_event(
@@ -1512,12 +1276,12 @@ impl HarnessRequestHandler {
         let opened = self
             .subscription_manager
             .ask(OpenTranscriptSubscription {
-                harness: watch.harness,
+                harness: watch.harness_name,
                 sink: TranscriptSubscriptionSink::new(),
             })
             .await
             .map_err(|error| Error::ActorCall(error.to_string()))?;
-        Ok(opened.snapshot.into())
+        Ok(HarnessEvent::HarnessTranscriptSnapshot(opened.snapshot))
     }
 
     async fn unwatch_transcript_event(
@@ -1532,14 +1296,19 @@ impl HarnessRequestHandler {
             .await
             .map_err(|error| Error::ActorCall(error.to_string()))?;
         if closed.closed {
-            Ok(signal_harness::HarnessSubscriptionRetracted { token }.into())
+            Ok(HarnessEvent::HarnessSubscriptionRetracted(
+                signal_harness::HarnessSubscriptionRetracted {
+                    harness_transcript_token: token,
+                },
+            ))
         } else {
-            Ok(HarnessRequestUnimplemented {
-                harness: token.harness,
-                operation: HarnessOperationKind::UnwatchHarnessTranscript,
-                reason: HarnessUnimplementedReason::NotBuiltYet,
-            }
-            .into())
+            Ok(HarnessEvent::HarnessRequestUnimplemented(
+                HarnessRequestUnimplemented {
+                    harness_name: token.harness_name,
+                    harness_operation_kind: HarnessOperationKind::UnwatchTranscript,
+                    harness_unimplemented_reason: HarnessUnimplementedReason::NotBuiltYet,
+                },
+            ))
         }
     }
 
@@ -1567,14 +1336,16 @@ impl HarnessRequestHandler {
             ));
         };
 
-        let binding =
-            HarnessTerminalBinding::for_harness(HarnessIdentifier::new(delivery.harness.as_str()));
-        match delivery_adapter.deliver_text(&binding, delivery.body.as_str()) {
-            Ok(receipt) if receipt.delivered() => Ok(DeliveryCompleted {
-                harness: delivery.harness,
-                message_slot: delivery.message_slot,
+        let binding = HarnessTerminalBinding::for_harness(HarnessIdentifier::new(
+            delivery.harness_name.as_str(),
+        ));
+        match delivery_adapter.deliver_text(&binding, delivery.message_body.as_str()) {
+            Ok(receipt) if receipt.delivered() => {
+                Ok(HarnessEvent::DeliveryCompleted(DeliveryCompleted {
+                    harness_name: delivery.harness_name,
+                    message_slot: delivery.message_slot,
+                }))
             }
-            .into()),
             Ok(_) | Err(_) => Ok(Self::delivery_failed(
                 delivery,
                 DeliveryFailureReason::TransportRejected,
@@ -1588,12 +1359,11 @@ impl HarnessRequestHandler {
             .ask(ReadState::expecting_at_least(0))
             .await
             .map_err(|error| Error::ActorCall(error.to_string()))?;
-        Ok(HarnessStatus {
-            harness: query.harness,
-            health: Self::health(&state),
-            readiness: Self::readiness(&state),
-        }
-        .into())
+        Ok(HarnessEvent::HarnessStatus(HarnessStatus {
+            harness_name: query.harness_name,
+            harness_health: Self::health(&state),
+            harness_readiness: Self::readiness(&state),
+        }))
     }
 
     fn health(state: &HarnessState) -> HarnessHealth {
@@ -1614,22 +1384,10 @@ impl HarnessRequestHandler {
     }
 
     fn delivery_failed(delivery: MessageDelivery, reason: DeliveryFailureReason) -> HarnessEvent {
-        DeliveryFailed {
-            harness: delivery.harness,
+        HarnessEvent::DeliveryFailed(DeliveryFailed {
+            harness_name: delivery.harness_name,
             message_slot: delivery.message_slot,
-            reason,
-        }
-        .into()
-    }
-
-    pub fn request_harness(request: &HarnessRequest) -> HarnessName {
-        match request {
-            HarnessRequest::MessageDelivery(payload) => payload.harness.clone(),
-            HarnessRequest::InteractionPrompt(payload) => payload.harness.clone(),
-            HarnessRequest::DeliveryCancellation(payload) => payload.harness.clone(),
-            HarnessRequest::HarnessStatusQuery(payload) => payload.harness.clone(),
-            HarnessRequest::WatchHarnessTranscript(payload) => payload.harness.clone(),
-            HarnessRequest::UnwatchHarnessTranscript(token) => token.harness.clone(),
-        }
+            delivery_failure_reason: reason,
+        })
     }
 }

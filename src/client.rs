@@ -2,12 +2,11 @@ use std::io::Write;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 
-use nota::{NotaEncode, NotaSource};
-use signal_frame::{ExchangeIdentifier, ExchangeLane, LaneSequence, Reply, SessionEpoch, SubReply};
-use signal_harness::{HarnessEvent, HarnessFrame, HarnessFrameBody, HarnessRequest};
-use triad_runtime::{ComponentCommand, FrameBody as RuntimeFrameBody, LengthPrefixedCodec};
+use signal_harness::{Query, Response};
 
-use crate::cli_argument::NotaCommandText;
+use crate::cli_argument::{DatomArgument, DatomPrint};
+use crate::usage::UsageView;
+use crate::wire::SignalWire;
 use crate::{Error, Result};
 
 const DEFAULT_HARNESS_SOCKET: &str = "/tmp/harness.sock";
@@ -29,79 +28,40 @@ impl HarnessEndpoint {
     }
 }
 
+/// The ordinary `signal-harness` client: one `Query` frame out, one
+/// `Response` frame back, over the daemon's ordinary socket.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HarnessClient {
     endpoint: HarnessEndpoint,
-    codec: LengthPrefixedCodec,
+    wire: SignalWire,
 }
 
 impl HarnessClient {
     pub fn new(endpoint: HarnessEndpoint) -> Self {
         Self {
             endpoint,
-            codec: LengthPrefixedCodec::default(),
+            wire: SignalWire::default(),
         }
     }
 
-    pub fn submit(&self, request: HarnessRequest) -> Result<HarnessEvent> {
-        let exchange = self.exchange();
-        let frame = HarnessFrame::new(HarnessFrameBody::Request {
-            exchange,
-            request: signal_frame::Request::from_payload(request),
-        });
+    pub fn submit(&self, query: Query) -> Result<Response> {
         let mut stream = UnixStream::connect(self.endpoint.as_path())?;
-        self.codec
-            .write_body(&mut stream, &RuntimeFrameBody::new(frame.encode()?))?;
-        let body = self.codec.read_body(&mut stream)?;
-        self.reply_from_frame(HarnessFrame::decode(body.bytes())?)
-    }
-
-    fn exchange(&self) -> ExchangeIdentifier {
-        let _endpoint = &self.endpoint;
-        ExchangeIdentifier::new(
-            SessionEpoch::new(0),
-            ExchangeLane::Connector,
-            LaneSequence::first(),
-        )
-    }
-
-    fn reply_from_frame(&self, frame: HarnessFrame) -> Result<HarnessEvent> {
-        match frame.into_body() {
-            HarnessFrameBody::Reply { reply, .. } => self.reply_output(reply),
-            other => Err(Error::UnexpectedSignalFrame {
-                got: format!("{other:?}"),
-            }),
-        }
-    }
-
-    fn reply_output(&self, reply: Reply<HarnessEvent>) -> Result<HarnessEvent> {
-        let _endpoint = &self.endpoint;
-        match reply {
-            Reply::Accepted { per_operation, .. } => match per_operation.into_head() {
-                SubReply::Ok(payload) => Ok(payload),
-                other => Err(Error::UnexpectedSignalFrame {
-                    got: format!("{other:?}"),
-                }),
-            },
-            Reply::Rejected { reason } => Err(Error::UnexpectedSignalFrame {
-                got: reason.to_string(),
-            }),
-        }
+        self.wire.write(&mut stream, &query)?;
+        self.wire.read(&mut stream)
     }
 }
 
+/// `harness '<Datom Query>'`: one inline Datom `Query`, one Datom `Response`
+/// printed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HarnessCommandLine {
-    command: ComponentCommand,
+    arguments: Vec<String>,
     environment: HarnessCommandEnvironment,
 }
 
 impl HarnessCommandLine {
     pub fn from_env() -> Self {
-        Self {
-            command: ComponentCommand::from_environment(),
-            environment: HarnessCommandEnvironment::from_process(),
-        }
+        Self::from_arguments(std::env::args().skip(1))
     }
 
     pub fn from_arguments<Arguments, Argument>(arguments: Arguments) -> Self
@@ -121,15 +81,15 @@ impl HarnessCommandLine {
         Argument: Into<String>,
     {
         Self {
-            command: ComponentCommand::from_arguments(arguments),
+            arguments: arguments.into_iter().map(Into::into).collect(),
             environment,
         }
     }
 
     pub fn run(self, mut output: impl Write) -> Result<()> {
-        let request = HarnessRequestText::from_command(self.command)?.into_request()?;
-        let reply = HarnessClient::new(self.environment.endpoint()).submit(request)?;
-        writeln!(output, "{}", reply.to_nota())?;
+        let query: Query = DatomArgument::from_arguments(self.arguments)?.actualize()?;
+        let response = HarnessClient::new(self.environment.endpoint()).submit(query)?;
+        writeln!(output, "{}", DatomPrint::of(&response).as_str())?;
         Ok(())
     }
 }
@@ -155,19 +115,53 @@ impl HarnessCommandEnvironment {
     }
 }
 
+/// `harness-usage`: one `UsageSnapshotQuery` to the daemon, the snapshot
+/// printed as the human view. It takes no argument; the typed reply is
+/// `harness UsageSnapshotQuery`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct HarnessRequestText {
-    text: NotaCommandText,
+pub struct UsageCommandLine {
+    arguments: Vec<String>,
+    environment: HarnessCommandEnvironment,
 }
 
-impl HarnessRequestText {
-    fn from_command(command: ComponentCommand) -> Result<Self> {
-        Ok(Self {
-            text: NotaCommandText::from_command(command)?,
-        })
+impl UsageCommandLine {
+    pub fn from_env() -> Self {
+        Self::from_arguments_with_environment(
+            std::env::args().skip(1),
+            HarnessCommandEnvironment::from_process(),
+        )
     }
 
-    fn into_request(self) -> Result<HarnessRequest> {
-        Ok(NotaSource::new(self.text.as_str()).parse::<HarnessRequest>()?)
+    pub fn from_arguments_with_environment<Arguments, Argument>(
+        arguments: Arguments,
+        environment: HarnessCommandEnvironment,
+    ) -> Self
+    where
+        Arguments: IntoIterator<Item = Argument>,
+        Argument: Into<String>,
+    {
+        Self {
+            arguments: arguments.into_iter().map(Into::into).collect(),
+            environment,
+        }
+    }
+
+    pub fn run(self, mut output: impl Write) -> Result<()> {
+        if !self.arguments.is_empty() {
+            return Err(Error::ArgumentCount {
+                count: self.arguments.len(),
+            });
+        }
+        let response =
+            HarnessClient::new(self.environment.endpoint()).submit(Query::UsageSnapshotQuery)?;
+        match response {
+            Response::UsageSnapshot(snapshot) => {
+                write!(output, "{}", UsageView::new(snapshot).render())?;
+                Ok(())
+            }
+            other => Err(Error::UnexpectedSignalFrame {
+                got: DatomPrint::of(&other).as_str().to_owned(),
+            }),
+        }
     }
 }

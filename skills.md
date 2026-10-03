@@ -15,8 +15,10 @@ Rules for work here:
 - Keep the component triad surface split: `harness` is the ordinary
   `signal-harness` CLI, `meta-harness` is the `meta-signal-harness`
   policy CLI, and `harness-daemon` is the managed runtime process.
-- The owner-only daemon socket recognizes `meta-signal-harness` before
-  falling back to Persona supervision while both management surfaces exist.
+- Each daemon socket carries one contract: ordinary `signal-harness`, the
+  owner-only `meta-signal-harness` meta socket, and the `signal-persona`
+  supervision socket. Never multiplex two contracts on one socket; a Signal
+  frame does not name its contract.
 - One `harness-daemon` component process may own multiple harness instances.
   Add per-harness boundaries as `HarnessInstanceConfiguration` records and
   in-process actors/adapters; do not spawn one daemon process per harness
@@ -38,10 +40,8 @@ Rules for work here:
   fan out through a shared `Arc<Mutex<Vec<_>>>`.
 - The handler's outbound delta buffer is bounded; on overrun the
   subscription drops with a typed failure reply.
-- The kernel grammar at `signal-frame/macros/src/validate.rs`
-  enforces close-is-Retract: the daemon must accept
-  `HarnessTranscriptRetraction` and emit the final
-  `HarnessSubscriptionRetracted` reply before closing the stream.
+- Close is retract: the daemon accepts `UnwatchHarnessTranscript` and emits
+  the final `HarnessSubscriptionRetracted` reply before closing the stream.
 
 ## See also
 

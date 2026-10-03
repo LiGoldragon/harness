@@ -28,7 +28,7 @@ use kameo::error::Infallible;
 use kameo::message::{Context, Message};
 use signal_harness::{
     HarnessName, HarnessStreamEvent, HarnessSubscriptionRetracted, HarnessTranscriptSequence,
-    HarnessTranscriptSnapshot, HarnessTranscriptSubscriptionIdentifier, HarnessTranscriptToken,
+    HarnessTranscriptSnapshot, HarnessTranscriptToken,
 };
 use std::sync::Mutex;
 use tokio::sync::mpsc::UnboundedSender;
@@ -39,14 +39,14 @@ use tokio::sync::mpsc::UnboundedSender;
 /// `HarnessStreamEvent`, so both `TranscriptObservation` and
 /// `ClaudeSessionObservation` — the two events the contract
 /// declares on the stream — ride the same fan-out path.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DeliverTranscriptDelta {
     pub event: HarnessStreamEvent,
 }
 
 /// Open a subscription. The handler that responds carries the
 /// per-stream token and the snapshot that opens the stream.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct OpenTranscriptSubscription {
     pub harness: HarnessName,
     pub sink: TranscriptSubscriptionSink,
@@ -55,7 +55,7 @@ pub struct OpenTranscriptSubscription {
 /// Close a subscription. The manager hands the token to the
 /// matching handler, which drains in-flight deltas and emits
 /// the final `HarnessSubscriptionRetracted` ack onto the sink.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CloseTranscriptSubscription {
     pub token: HarnessTranscriptToken,
 }
@@ -67,7 +67,7 @@ pub struct CloseTranscriptSubscription {
 /// observation (`ClaudeSessionObservation`) enter the fan-out
 /// plane through the same message. The publisher fans it out to
 /// every open handler.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PublishStreamEvent {
     pub event: HarnessStreamEvent,
 }
@@ -101,7 +101,7 @@ struct TranscriptSubscriptionSinkInner {
 /// One event delivered to the consumer-facing sink. The
 /// variants mirror the subscription's lifecycle: snapshot
 /// (open), delta (event), final ack (close).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TranscriptDeliveryEvent {
     Snapshot(HarnessTranscriptSnapshot),
     Delta(HarnessStreamEvent),
@@ -317,7 +317,7 @@ impl Actor for TranscriptStreamingReplyHandler {
 
 /// Initial open snapshot to push onto the sink. The manager
 /// sends this to the new handler right after spawning it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DeliverSnapshot {
     pub snapshot: HarnessTranscriptSnapshot,
 }
@@ -420,7 +420,7 @@ impl Message<EmitFinalRetractionAck> for TranscriptStreamingReplyHandler {
             };
         }
         let ack = HarnessSubscriptionRetracted {
-            token: self.token.clone(),
+            harness_transcript_token: self.token.clone(),
         };
         match self
             .sink
@@ -479,7 +479,7 @@ impl Message<ReadHandlerStatus> for TranscriptStreamingReplyHandler {
 #[derive(Debug)]
 pub struct TranscriptSubscriptionManager {
     open: Vec<TranscriptSubscriptionEntry>,
-    next_subscription_identifier: u64,
+    next_subscription_identifier: i64,
     opened_count: u64,
     closed_count: u64,
 }
@@ -550,16 +550,15 @@ impl Message<OpenTranscriptSubscription> for TranscriptSubscriptionManager {
         message: OpenTranscriptSubscription,
         _context: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        let subscription =
-            HarnessTranscriptSubscriptionIdentifier::new(self.next_subscription_identifier);
+        let subscription = self.next_subscription_identifier;
         self.next_subscription_identifier = self.next_subscription_identifier.saturating_add(1);
         let token = HarnessTranscriptToken {
-            harness: message.harness.clone(),
-            subscription,
+            harness_name: message.harness.clone(),
+            harness_transcript_subscription_identifier: subscription,
         };
         let snapshot = HarnessTranscriptSnapshot {
-            token: token.clone(),
-            current_sequence: HarnessTranscriptSequence::new(0),
+            harness_transcript_token: token.clone(),
+            harness_transcript_sequence: HarnessTranscriptSequence::from(0_i64),
         };
         let handler = TranscriptStreamingReplyHandler::spawn(TranscriptStreamingReplyHandler::new(
             token.clone(),
@@ -645,7 +644,7 @@ impl Message<ReadManagerStatus> for TranscriptSubscriptionManager {
 /// Snapshot of registered handlers, for the publisher to fan
 /// deltas out to. Returned by the manager when the publisher
 /// asks for the current routing table.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ReadSubscriptionHandlers;
 
 #[derive(Debug, Clone, kameo::Reply)]

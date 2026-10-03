@@ -4,14 +4,18 @@
 //! to its rollout file, and the rollout tail's last `token_count` event gives
 //! the last request's input tokens and the model's context window. A later
 //! user message or compaction marks the figure superseded. A thread whose
-//! rollout cannot be bound to its id is reported unbound.
+//! rollout cannot be bound to its id is reported unbound. A control socket that
+//! cannot be opened or listed is reported as an unavailable source for its
+//! home rather than skipped. No Flow is bound: a thread's display name is not
+//! a witnessed thread-to-Flow binding, so it stays display metadata only.
 
 use std::path::Path;
 
 use serde_json::{Value, json};
-use usage_contract::{
-    ContextBasis, ContextFreshness, ContextUnavailableReason, SessionContext,
-    SessionContextObservation, SessionContextUnavailable, UsageProvider,
+use signal_harness::{
+    ContextBasis, ContextFreshness, ContextSourceFailureReason, ContextSourceUnavailable,
+    ContextUnavailableReason, SessionContext, SessionContextObservation, SessionContextUnavailable,
+    UsageProvider,
 };
 
 use super::app_server::{AppServerFailure, AppServerSession, AppServerTimeout, JsonRpcExchange};
@@ -110,17 +114,6 @@ impl CodexLiveThreads {
         })
     }
 
-    /// The flow id a flow title carries: `Aspect.{ Model 1a2b3c }`.
-    fn flow_from_name(name: &str) -> Option<String> {
-        let inner = name.trim().strip_suffix('}')?.trim_end();
-        let candidate = inner.rsplit(char::is_whitespace).next()?;
-        (candidate.len() == 6
-            && candidate
-                .chars()
-                .all(|character| matches!(character, '0'..='9' | 'a'..='f')))
-        .then(|| candidate.to_owned())
-    }
-
     fn observe_thread(
         &self,
         session: &mut AppServerSession,
@@ -168,7 +161,7 @@ impl CodexLiveThreads {
         SessionContextObservation::Observed(SessionContext {
             usage_provider: UsageProvider::Codex,
             session_identifier: thread.to_owned(),
-            flow_identifier_option: metadata.name.as_deref().and_then(Self::flow_from_name),
+            flow_identifier_option: None,
             session_name_option: metadata.name,
             model_identifier_option: metadata.model,
             observation_time: instant.nanoseconds(),
@@ -186,13 +179,41 @@ impl ContextSource for CodexLiveThreads {
     fn observe_context(&self, instant: ObservationInstant) -> Vec<SessionContextObservation> {
         let mut seen: Vec<String> = Vec::new();
         let mut observations = Vec::new();
-        for home in self.home.codex_homes() {
-            for socket in home.control_sockets() {
-                let Ok(mut session) = AppServerSession::open(&socket, self.timeout) else {
-                    continue;
-                };
-                let Ok(threads) = Self::loaded(&mut session) else {
-                    continue;
+        let homes = self.home.codex_homes();
+        if homes.is_empty() {
+            return vec![SessionContextObservation::SourceUnavailable(
+                ContextSourceUnavailable {
+                    usage_provider: UsageProvider::Codex,
+                    account_home_option: None,
+                    observation_time: instant.nanoseconds(),
+                    context_source_failure_reason: ContextSourceFailureReason::NoLiveControlSocket,
+                },
+            )];
+        }
+        for home in homes {
+            let sockets = home.control_sockets();
+            if sockets.is_empty() {
+                observations.push(Self::source_unavailable(
+                    instant,
+                    home.name(),
+                    ContextSourceFailureReason::NoLiveControlSocket,
+                ));
+            }
+            for socket in sockets {
+                let opened =
+                    AppServerSession::open(&socket, self.timeout).and_then(|mut session| {
+                        Self::loaded(&mut session).map(|threads| (session, threads))
+                    });
+                let (mut session, threads) = match opened {
+                    Ok(opened) => opened,
+                    Err(failure) => {
+                        observations.push(Self::source_unavailable(
+                            instant,
+                            home.name(),
+                            failure.into(),
+                        ));
+                        continue;
+                    }
                 };
                 for thread in threads {
                     if seen.contains(&thread) {
@@ -204,6 +225,34 @@ impl ContextSource for CodexLiveThreads {
             }
         }
         observations
+    }
+}
+
+// Exception (too trivial): the private constructor of one source failure.
+impl CodexLiveThreads {
+    fn source_unavailable(
+        instant: ObservationInstant,
+        home: &str,
+        reason: ContextSourceFailureReason,
+    ) -> SessionContextObservation {
+        SessionContextObservation::SourceUnavailable(ContextSourceUnavailable {
+            usage_provider: UsageProvider::Codex,
+            account_home_option: Some(home.to_owned()),
+            observation_time: instant.nanoseconds(),
+            context_source_failure_reason: reason,
+        })
+    }
+}
+
+impl From<AppServerFailure> for ContextSourceFailureReason {
+    fn from(failure: AppServerFailure) -> Self {
+        match failure {
+            AppServerFailure::Absent => Self::NoLiveControlSocket,
+            AppServerFailure::TimedOut => Self::TransportTimedOut,
+            AppServerFailure::TransportFailed => Self::TransportFailed,
+            AppServerFailure::Rejected => Self::ProviderRejected,
+            AppServerFailure::Unreadable => Self::ProviderResponseUnreadable,
+        }
     }
 }
 

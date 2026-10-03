@@ -23,5 +23,6 @@ input observations, and adapter contracts for interactive agent harnesses.
 ## Protos estate status
 
 Stack: correct-new destination
-Status: active component, current checkout legacy-wired
-This checkout is not proof of correct-new adoption.
+Status: active component; contracts on the Signal 5.0.0 family
+(`signal-harness` 8.0.0, `meta-signal-harness` 1.0.1, `signal-persona` 4.0.0).
+The daemon shell is still the schema-rust/triad-runtime emitter.

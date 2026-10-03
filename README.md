@@ -32,7 +32,13 @@ identity, kind, and working directory; redacted views expose only the harness
 id; hidden views expose no incidental harness identity. These views are not
 runtime authorization gates.
 
-The component surface has two thin CLI clients and one daemon:
-`harness` sends ordinary `signal-harness` requests, `meta-harness` sends
-privileged `meta-signal-harness` policy requests, and `harness-daemon`
-serves the managed runtime sockets from a single binary startup record.
+The component surface has three thin CLI clients and one daemon:
+`harness` sends one ordinary `signal-harness` request given as one inline
+Datom value, `meta-harness` sends one privileged `meta-signal-harness`
+policy request the same way, `harness-usage` prints the human view of one
+usage snapshot, and `harness-daemon` serves the ordinary, meta and
+supervision sockets from a single binary startup record.
+
+`harness UsageSnapshotQuery` returns the typed snapshot of every Claude and
+Codex subscription's quota windows and every live session's context;
+`harness-usage` renders the same snapshot for reading.

@@ -7,35 +7,35 @@
 //! reply lists them together under that account.
 
 use serde_json::Value;
-use usage_contract::{
-    QuotaLimit, ResetBasis, SubscriptionObservation, SubscriptionUsage, UsageProvider, UsageSource,
-    UsageUnavailable, UsageUnavailableReason, WindowDurationBasis,
+use signal_harness::{
+    PeriodSemantics, QuotaLimit, QuotaWindow, ResetBasis, SubscriptionObservation,
+    SubscriptionUsage, UsageProvider, UsageSource, UsageUnavailable, UsageUnavailableReason,
+    WindowDurationBasis,
 };
 
 use super::app_server::{AppServerFailure, AppServerSession, AppServerTimeout, JsonRpcExchange};
-use super::pace::{WindowNormalizing, WindowReading};
+use super::window::{
+    LocalZone, ProviderPercent, WindowNormalizing, WindowObservation, WindowReading,
+};
 use super::{CodexHome, ObservationInstant, QuotaDocument, QuotaSource, UsageHome};
 
 const SERVER_WINDOWS: [&str; 2] = ["primary", "secondary"];
-/// Per-limit keys that are understood; any other non-null key is retained by
-/// name as an unrecognized window.
-const RECOGNIZED_LIMIT_KEYS: [&str; 9] = [
-    "limitId",
-    "limitName",
-    "normalModelSlug",
-    "primary",
-    "secondary",
-    "credits",
-    "spendControlReached",
-    "planType",
-    "rateLimitReachedType",
-];
+/// Per-limit keys that are modelled; any other present key is an
+/// unrecognized window when it is window-shaped (it has a `usedPercent`) and
+/// an unmodeled source fact otherwise (credits, spend control, the reached
+/// limit type and the like).
+const MODELLED_LIMIT_KEYS: [&str; 5] = ["limitId", "limitName", "primary", "secondary", "planType"];
+/// Top-level result keys that are modelled or deliberately withheld; any
+/// other present key is an unmodeled source fact. The account identifier is
+/// read only to merge homes and never named in a reply.
+const MODELLED_RESULT_KEYS: [&str; 3] = ["rateLimits", "rateLimitsByLimitId", "accountId"];
 
 /// The Codex quota source over every Codex home under one home directory.
 #[derive(Clone, Debug)]
 pub struct CodexUsageSource {
     home: UsageHome,
     timeout: AppServerTimeout,
+    zone: LocalZone,
 }
 
 /// One `account/rateLimits/read` result, with the homes that returned it.
@@ -52,11 +52,18 @@ enum HomeAnswer {
         home: String,
         failure: AppServerFailure,
     },
+    CollectorFailed {
+        home: String,
+    },
 }
 
 impl CodexUsageSource {
-    pub fn new(home: UsageHome, timeout: AppServerTimeout) -> Self {
-        Self { home, timeout }
+    pub fn new(home: UsageHome, timeout: AppServerTimeout, zone: LocalZone) -> Self {
+        Self {
+            home,
+            timeout,
+            zone,
+        }
     }
 
     fn ask(&self, home: &CodexHome) -> HomeAnswer {
@@ -101,9 +108,8 @@ impl QuotaSource for CodexUsageSource {
                 .into_iter()
                 .zip(&homes)
                 .map(|(handle, home)| {
-                    handle.join().unwrap_or(HomeAnswer::Failed {
+                    handle.join().unwrap_or(HomeAnswer::CollectorFailed {
                         home: home.name().to_owned(),
-                        failure: AppServerFailure::TransportFailed,
                     })
                 })
                 .collect()
@@ -122,21 +128,41 @@ impl QuotaSource for CodexUsageSource {
                     }
                 }
                 HomeAnswer::Failed { home, failure } => {
-                    failures.push(SubscriptionObservation::Unavailable(UsageUnavailable {
-                        usage_provider: UsageProvider::Codex,
-                        observation_time: instant.nanoseconds(),
-                        account_home_option: Some(home),
-                        usage_unavailable_reason: failure.into(),
-                    }));
+                    failures.push(Self::unavailable(instant, home, failure.into()));
+                }
+                HomeAnswer::CollectorFailed { home } => {
+                    failures.push(Self::unavailable(
+                        instant,
+                        home,
+                        UsageUnavailableReason::CollectorFailed,
+                    ));
                 }
             }
         }
         let observed = ObservationInstant::now();
         accounts
             .iter()
-            .map(|document| SubscriptionObservation::Observed(document.normalize(observed)))
+            .map(|document| {
+                SubscriptionObservation::Observed(document.normalize(observed, &self.zone))
+            })
             .chain(failures)
             .collect()
+    }
+}
+
+// Exception (too trivial): the private constructor of one home's failure.
+impl CodexUsageSource {
+    fn unavailable(
+        instant: ObservationInstant,
+        home: String,
+        reason: UsageUnavailableReason,
+    ) -> SubscriptionObservation {
+        SubscriptionObservation::Unavailable(UsageUnavailable {
+            usage_provider: UsageProvider::Codex,
+            observation_time: instant.nanoseconds(),
+            account_home_option: Some(home),
+            usage_unavailable_reason: reason,
+        })
     }
 }
 
@@ -180,14 +206,16 @@ impl CodexRateLimitsDocument {
         }
     }
 
-    fn window(bucket: &Value, name: &str, observed: i64) -> Option<usage_contract::QuotaWindow> {
+    fn window(bucket: &Value, name: &str, observation: &WindowObservation) -> Option<QuotaWindow> {
         let window = bucket.get(name).filter(|window| !window.is_null())?;
-        let used = window.get("usedPercent").and_then(Value::as_f64)?;
         Some(
             WindowReading {
                 name: name.to_owned(),
                 scope: None,
-                used_basis_points: (used * 100.0).round() as i64,
+                used: window
+                    .get("usedPercent")
+                    .and_then(Value::as_f64)
+                    .map_or(ProviderPercent::Absent, ProviderPercent::Present),
                 reset_basis: window
                     .get("resetsAt")
                     .and_then(Value::as_i64)
@@ -199,16 +227,32 @@ impl CodexRateLimitsDocument {
                         WindowDurationBasis::Unknown,
                         WindowDurationBasis::ProviderDeclared,
                     ),
+                period_semantics: PeriodSemantics::NotEstablished,
             }
-            .normalize_at(observed),
+            .normalize_at(observation),
         )
+    }
+
+    /// The present keys of an object outside the modelled ones.
+    fn present_keys<'a>(value: &'a Value, modelled: &'a [&str]) -> Vec<(&'a str, &'a Value)> {
+        value
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter(|(key, value)| !value.is_null() && !modelled.contains(&key.as_str()))
+            .map(|(key, value)| (key.as_str(), value))
+            .collect()
     }
 }
 
 impl QuotaDocument for CodexRateLimitsDocument {
-    fn normalize(&self, instant: ObservationInstant) -> SubscriptionUsage {
-        let observed = instant.seconds();
+    fn normalize(&self, instant: ObservationInstant, zone: &LocalZone) -> SubscriptionUsage {
+        let observation = WindowObservation::new(instant.seconds(), zone.clone());
         let mut unrecognized = Vec::new();
+        let mut facts: Vec<String> = Self::present_keys(&self.result, &MODELLED_RESULT_KEYS)
+            .into_iter()
+            .map(|(key, _)| key.to_owned())
+            .collect();
         let mut plan = None;
         let quota_limits = self
             .limit_buckets()
@@ -225,9 +269,11 @@ impl QuotaDocument for CodexRateLimitsDocument {
                         .and_then(Value::as_str)
                         .map(str::to_owned)
                 });
-                for (key, value) in bucket.as_object().into_iter().flatten() {
-                    if !value.is_null() && !RECOGNIZED_LIMIT_KEYS.contains(&key.as_str()) {
+                for (key, value) in Self::present_keys(bucket, &MODELLED_LIMIT_KEYS) {
+                    if value.get("usedPercent").is_some() {
                         unrecognized.push(format!("{identifier}.{key}"));
+                    } else {
+                        facts.push(format!("{identifier}.{key}"));
                     }
                 }
                 QuotaLimit {
@@ -237,7 +283,7 @@ impl QuotaDocument for CodexRateLimitsDocument {
                         .map(str::to_owned),
                     quota_windows: SERVER_WINDOWS
                         .iter()
-                        .filter_map(|name| Self::window(bucket, name, observed))
+                        .filter_map(|name| Self::window(bucket, name, &observation))
                         .collect(),
                     quota_limit_identifier: identifier,
                 }
@@ -251,6 +297,7 @@ impl QuotaDocument for CodexRateLimitsDocument {
             account_homes: self.homes.clone(),
             quota_limits,
             unrecognized_window_names: unrecognized,
+            unmodeled_source_facts: facts,
         }
     }
 }

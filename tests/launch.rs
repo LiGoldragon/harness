@@ -4,7 +4,7 @@
 use std::time::{Duration, Instant};
 
 use harness::launch::{FixtureLaunchCommand, SessionLauncher};
-use meta_signal_harness::MetaHarnessReply;
+use meta_signal_harness::Response as MetaHarnessReply;
 use signal_harness::{
     AgentIdentityToken, ContinuationHandle, ContinuationRequest, HarnessKind, InitialPrompt,
     PiContinuationIdentifier, SessionLaunchRefusalReason, SessionLaunchRequest,
@@ -17,9 +17,9 @@ fn launch_request(
 ) -> SessionLaunchRequest {
     SessionLaunchRequest {
         harness_kind: kind,
-        agent_identity: AgentIdentityToken::new("xk3f"),
-        initial_prompt: InitialPrompt::new(prompt),
-        continuation,
+        agent_identity_token: AgentIdentityToken::from("xk3f"),
+        initial_prompt: InitialPrompt::from(prompt),
+        continuation_request: continuation,
     }
 }
 
@@ -34,7 +34,7 @@ fn codex_launch_is_refused_typed() {
     match reply {
         MetaHarnessReply::SessionLaunchRefused(refused) => {
             assert_eq!(
-                refused.reason,
+                refused.session_launch_refusal_reason,
                 SessionLaunchRefusalReason::HarnessKindUnsupported
             );
         }
@@ -47,7 +47,7 @@ fn continuation_launch_is_refused_typed_until_the_resume_leg_lands() {
     let launcher = SessionLauncher::from_environment();
     let reply = launcher.launch(launch_request(
         HarnessKind::Pi,
-        ContinuationRequest::Require(ContinuationHandle::Pi(PiContinuationIdentifier::new(
+        ContinuationRequest::Require(ContinuationHandle::Pi(PiContinuationIdentifier::from(
             "pi-session-1",
         ))),
         "You are agent xk3f.",
@@ -55,7 +55,7 @@ fn continuation_launch_is_refused_typed_until_the_resume_leg_lands() {
     match reply {
         MetaHarnessReply::SessionLaunchRefused(refused) => {
             assert_eq!(
-                refused.reason,
+                refused.session_launch_refusal_reason,
                 SessionLaunchRefusalReason::ContinuationUnsupported
             );
         }
@@ -74,7 +74,7 @@ fn unconfigured_fixture_launch_is_refused_typed() {
     match reply {
         MetaHarnessReply::SessionLaunchRefused(refused) => {
             assert_eq!(
-                refused.reason,
+                refused.session_launch_refusal_reason,
                 SessionLaunchRefusalReason::LauncherUnavailable
             );
         }
@@ -106,9 +106,9 @@ fn fixture_launch_delivers_identity_bearing_prompt_as_final_spawn_argument() {
         MetaHarnessReply::SessionLaunched(launched) => launched,
         other => panic!("expected launch, got {other:?}"),
     };
-    assert_eq!(launched.agent_identity.as_str(), "xk3f");
-    assert!(launched.child_process_id > 0);
-    assert!(launched.session_directory.is_none());
+    assert_eq!(launched.agent_identity_token.as_str(), "xk3f");
+    assert!(launched.child_process_identifier > 0);
+    assert!(launched.session_directory_option.is_none());
 
     let deadline = Instant::now() + Duration::from_secs(5);
     let captured = loop {

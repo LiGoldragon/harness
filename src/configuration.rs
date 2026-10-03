@@ -6,23 +6,26 @@ use triad_runtime::{BindingSurface, SocketMode as RuntimeSocketMode};
 use crate::error::{Error, Result};
 
 /// Harness's hand-written daemon configuration, wrapping the `signal-harness`
-/// startup contract that the Persona manager encodes when it spawns
-/// `harness-daemon`. The contract `HarnessDaemonConfiguration` is the
-/// externally-consumed boundary; this type adds the cached `PathBuf`s the
-/// emitted daemon shell binds from through `triad_runtime::BindingSurface`,
-/// and carries the decoded contract through to the engine.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// startup contract its emitter encodes before spawning `harness-daemon`. The
+/// contract `HarnessDaemonConfiguration` is the externally-consumed boundary;
+/// this type adds the cached `PathBuf`s the emitted daemon shell binds its
+/// ordinary and meta listeners from through `triad_runtime::BindingSurface`,
+/// the supervision socket the engine binds itself, and carries the decoded
+/// contract through to the engine.
+#[derive(Clone, Debug, PartialEq)]
 pub struct Configuration {
     raw: HarnessDaemonConfiguration,
     harness_socket_path: PathBuf,
+    meta_socket_path: PathBuf,
     supervision_socket_path: PathBuf,
     state_dir: PathBuf,
 }
 
 impl Configuration {
     pub fn from_raw(raw: HarnessDaemonConfiguration) -> Self {
-        let harness_socket_path = PathBuf::from(raw.domain_socket_path.payload());
-        let supervision_socket_path = PathBuf::from(raw.engine_management_socket_path.payload());
+        let harness_socket_path = PathBuf::from(&raw.domain_socket_path);
+        let meta_socket_path = PathBuf::from(&raw.meta_socket_path);
+        let supervision_socket_path = PathBuf::from(&raw.engine_management_socket_path);
         let state_dir = harness_socket_path
             .parent()
             .map(Path::to_path_buf)
@@ -30,6 +33,7 @@ impl Configuration {
         Self {
             raw,
             harness_socket_path,
+            meta_socket_path,
             supervision_socket_path,
             state_dir,
         }
@@ -43,7 +47,7 @@ impl Configuration {
             path: path.to_path_buf(),
             source,
         })?;
-        let raw = HarnessDaemonConfiguration::from_rkyv_bytes(&bytes)
+        let raw = rkyv::from_bytes::<HarnessDaemonConfiguration, rkyv::rancor::Error>(&bytes)
             .map_err(|_| Error::ConfigurationArchiveDecode)?;
         Ok(Self::from_raw(raw))
     }
@@ -56,12 +60,20 @@ impl Configuration {
         self.raw
     }
 
-    fn harness_socket_mode(&self) -> RuntimeSocketMode {
-        RuntimeSocketMode::new(*self.raw.domain_socket_mode.payload() as u32)
+    pub fn supervision_socket_path(&self) -> &Path {
+        &self.supervision_socket_path
     }
 
-    fn supervision_socket_mode(&self) -> RuntimeSocketMode {
-        RuntimeSocketMode::new(*self.raw.engine_management_socket_mode.payload() as u32)
+    pub fn supervision_socket_mode(&self) -> u32 {
+        self.raw.engine_management_socket_mode as u32
+    }
+
+    fn harness_socket_mode(&self) -> RuntimeSocketMode {
+        RuntimeSocketMode::new(self.raw.domain_socket_mode as u32)
+    }
+
+    fn meta_listener_mode(&self) -> RuntimeSocketMode {
+        RuntimeSocketMode::new(self.raw.meta_socket_mode as u32)
     }
 }
 
@@ -75,11 +87,11 @@ impl BindingSurface for Configuration {
     }
 
     fn meta_socket_path(&self) -> Option<&Path> {
-        Some(&self.supervision_socket_path)
+        Some(&self.meta_socket_path)
     }
 
     fn meta_socket_mode(&self) -> Option<RuntimeSocketMode> {
-        Some(self.supervision_socket_mode())
+        Some(self.meta_listener_mode())
     }
 
     fn database_path(&self) -> &Path {
