@@ -21,6 +21,10 @@ Breaking wire change. Client, daemon and every peer move together.
 - Transcript stream events arrive as `Response::HarnessTranscriptEvent`
   carrying their subscription token.
 
+- New `harness-daemon-launch` runs the daemon as a user service: it writes
+  the typed configuration for systemd's `RUNTIME_DIRECTORY` and the user's
+  uid and becomes `harness-daemon`.
+
 Deploy the CLI and the daemon from one package revision; restart any running
 `harness-daemon` with a configuration written for 0.6.0.
 

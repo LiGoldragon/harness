@@ -1,7 +1,8 @@
 //! The one-call usage snapshot end to end: the real `harness-daemon`, started
 //! with an empty instance set on a fixture home, answers `UsageSnapshotQuery`
 //! at daemon scope, and both installed clients — `harness UsageSnapshotQuery`
-//! and `harness-usage` — print it.
+//! and `harness-usage` — print it. The user-service launcher writes the same
+//! shape of configuration and becomes that daemon.
 
 #[path = "support/usage_fixtures.rs"]
 mod usage_fixtures;
@@ -168,4 +169,78 @@ fn both_clients_print_the_snapshot_in_one_call() {
         assert!(!view.contains(forbidden), "{forbidden} leaked: {view}");
         assert!(!typed.contains(forbidden), "{forbidden} leaked: {typed}");
     }
+}
+
+#[test]
+fn the_user_service_launcher_writes_its_typed_configuration_and_becomes_the_daemon() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let home = FixtureHome::new();
+    let runtime = home.path().join("run-harness");
+    std::fs::create_dir_all(&runtime).expect("runtime directory");
+    let mut launcher = Command::new(env!("CARGO_BIN_EXE_harness-daemon-launch"))
+        .env("RUNTIME_DIRECTORY", &runtime)
+        .env("HOME", home.path())
+        .env("TZ", "UTC")
+        .spawn()
+        .expect("launcher starts");
+    let socket = runtime.join("harness.sock");
+    for name in ["harness.sock", "meta-harness.sock", "supervision.sock"] {
+        UsageDaemon::wait_for(&runtime.join(name));
+        let mode = std::fs::metadata(runtime.join(name))
+            .expect("socket metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600, "{name} is owner-only");
+    }
+    let configuration = HarnessDaemonConfigurationFile::new(runtime.join("harness-daemon.rkyv"))
+        .configuration()
+        .expect("written configuration decodes");
+    assert_eq!(
+        configuration,
+        harness::UserServiceLaunch::new(&runtime, created_file_owner()).configuration()
+    );
+    assert!(configuration.harness_instance_configurations.is_empty());
+    let mode = std::fs::metadata(runtime.join("harness-daemon.rkyv"))
+        .expect("configuration metadata")
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(mode, 0o600);
+
+    let mut stream = std::os::unix::net::UnixStream::connect(&socket).expect("client connects");
+    let wire = SignalWire::default();
+    wire.write(&mut stream, &Query::UsageSnapshotQuery)
+        .expect("query writes");
+    assert!(matches!(
+        wire.read(&mut stream).expect("reply reads"),
+        Response::UsageSnapshot(_)
+    ));
+    let _ = launcher.kill();
+    let _ = launcher.wait();
+}
+
+#[test]
+fn the_launcher_refuses_without_a_service_runtime_directory_or_with_an_argument() {
+    let without = Command::new(env!("CARGO_BIN_EXE_harness-daemon-launch"))
+        .env_remove("RUNTIME_DIRECTORY")
+        .output()
+        .expect("launcher runs");
+    assert!(!without.status.success());
+    assert!(String::from_utf8_lossy(&without.stderr).contains("RUNTIME_DIRECTORY"));
+
+    let with_argument = Command::new(env!("CARGO_BIN_EXE_harness-daemon-launch"))
+        .arg("anything")
+        .output()
+        .expect("launcher runs");
+    assert!(!with_argument.status.success());
+    assert!(String::from_utf8_lossy(&with_argument.stderr).contains("takes no argument"));
+}
+
+/// This test process's uid, as the owner of a file it creates.
+fn created_file_owner() -> u32 {
+    use std::os::unix::fs::MetadataExt;
+    let probe = tempfile::NamedTempFile::new().expect("probe file");
+    probe.as_file().metadata().expect("probe metadata").uid()
 }

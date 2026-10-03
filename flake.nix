@@ -175,6 +175,8 @@
           usage-collector-failed = context.cargoTest "usage_sources" "a_reader_that_cannot_run_reports_every_collector_failed";
           usage-daemon-scope-without-instances = context.cargoTest "usage_daemon" "the_daemon_answers_the_usage_query_without_any_configured_instance";
           usage-both-clients-one-call = context.cargoTest "usage_daemon" "both_clients_print_the_snapshot_in_one_call";
+          usage-user-service-launcher = context.cargoTest "usage_daemon" "the_user_service_launcher_writes_its_typed_configuration_and_becomes_the_daemon";
+          usage-launcher-refusals = context.cargoTest "usage_daemon" "the_launcher_refuses_without_a_service_runtime_directory_or_with_an_argument";
           usage-cli-human-view = context.cargoTest "component_cli" "usage_cli_leads_each_window_with_remaining_time_left_reset_and_rate";
         }
       );

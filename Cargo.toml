@@ -1,6 +1,6 @@
 [package]
 name         = "harness"
-version      = "0.6.0"
+version      = "0.6.1"
 edition      = "2024"
 rust-version = "1.89"
 license      = "MIT OR Apache-2.0"
@@ -27,6 +27,10 @@ path = "src/bin/harness_daemon.rs"
 [[bin]]
 name = "harness-usage"
 path = "src/bin/harness_usage.rs"
+
+[[bin]]
+name = "harness-daemon-launch"
+path = "src/bin/harness_daemon_launch.rs"
 
 [[bin]]
 name = "flow-id"
@@ -62,6 +66,7 @@ ureq                    = { version = "3", default-features = false, features = 
 signal-persona          = { git = "https://github.com/LiGoldragon/signal-persona.git", rev = "5ed07a66d473f4fff7b293102023fc26588a3d94", features = ["datom"] }
 signal-terminal        = { git = "https://github.com/LiGoldragon/signal-terminal.git", rev = "ddbd3237a57e3ca19b5f6208a93770c5eee73aa3" }
 serde_json              = "1"
+rustix                  = { version = "1", features = ["process"] }
 thiserror               = "2"
 tokio                   = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time"] }
 triad-runtime           = { git = "https://github.com/LiGoldragon/triad-runtime.git", branch = "main" }

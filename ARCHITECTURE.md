@@ -69,6 +69,10 @@ flowchart LR
 - `harness-daemon`, the managed runtime daemon that binds the ordinary,
   owner-only meta and supervision sockets from a single binary startup
   record;
+- `harness-daemon-launch`, the user-service launcher: it takes no argument,
+  writes the typed startup record for its systemd `RUNTIME_DIRECTORY` and its
+  own uid (three `0600` sockets there, an empty instance set), and replaces
+  itself with `harness-daemon`;
 - `flow-id`, the parent-only filesystem claim CLI for one shared flow alias:
   Codex claims normalized UUID characters `[23:29]`, while Claude claims the
   first six literal hexadecimal characters of a canonical lowercase UUIDv4 or
@@ -375,6 +379,7 @@ src/transcript.rs         transcript event records
 src/usage/                one-shot subscription-usage snapshot (quota and context) and its human view
 src/wire.rs               the plain Signal frame every socket speaks
 src/bin/harness_usage.rs  the harness-usage human-view client
+src/launch_user.rs        the user-service launcher's typed configuration
 tests/                    harness smoke, daemon, CLI, and actor-runtime tests
 ```
 
@@ -395,6 +400,7 @@ tests/                    harness smoke, daemon, CLI, and actor-runtime tests
 | Auxiliary allowance and spend facts are named, never windows. | `nix build .#checks.<system>.usage-claude-auxiliary-facts-named`; `nix build .#checks.<system>.usage-codex-every-limit-window-and-fact` |
 | Every attempted context source and collector reports its failure. | `nix build .#checks.<system>.usage-codex-context-source-failures`; `nix build .#checks.<system>.usage-claude-registry-failures`; `nix build .#checks.<system>.usage-collector-failed` |
 | The daemon answers the usage query with no configured instance; both clients print it in one call. | `nix build .#checks.<system>.usage-daemon-scope-without-instances`; `nix build .#checks.<system>.usage-both-clients-one-call` |
+| The user-service launcher writes the owner-only empty-instance configuration and becomes the daemon; it refuses an argument or a missing runtime directory. | `nix build .#checks.<system>.usage-user-service-launcher`; `nix build .#checks.<system>.usage-launcher-refusals` |
 | The human view leads with remaining, time left, local reset and the remainder rate. | `nix build .#checks.<system>.usage-cli-human-view` |
 | A Codex parent claims one stable alias from its UUID and prints no other stdout. | `nix flake check .#flow-id` |
 | A Claude parent claims the first six literal hex characters of its UUIDv4 or UUIDv5 parent session. | `nix flake check .#flow-id-claude` |

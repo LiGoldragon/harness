@@ -46,6 +46,9 @@ pub enum Error {
         source: std::io::Error,
     },
 
+    #[error("the service runtime directory (RUNTIME_DIRECTORY) is not set")]
+    RuntimeDirectoryAbsent,
+
     #[error("failed to encode binary daemon configuration")]
     ConfigurationArchiveEncode,
 

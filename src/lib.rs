@@ -10,6 +10,7 @@ pub mod error;
 pub mod flow_id;
 pub mod harness;
 pub mod launch;
+pub mod launch_user;
 pub mod meta;
 pub mod pi;
 pub mod runtime;
@@ -43,6 +44,7 @@ pub use error::{Error, Result};
 pub use harness::{
     HarnessBinding, HarnessIdentifier, HarnessIdentityProjection, HarnessIdentityView, HarnessKind,
 };
+pub use launch_user::UserServiceLaunch;
 pub use meta::{
     MetaHarnessClient, MetaHarnessCommandEnvironment, MetaHarnessCommandLine, MetaHarnessEndpoint,
 };
