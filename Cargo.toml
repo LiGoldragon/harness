@@ -1,6 +1,6 @@
 [package]
 name         = "harness"
-version      = "0.6.1"
+version      = "0.6.2"
 edition      = "2024"
 rust-version = "1.89"
 license      = "MIT OR Apache-2.0"
@@ -61,6 +61,7 @@ datom-codec             = { git = "https://github.com/LiGoldragon/datom-codec", 
 protos                  = { git = "https://github.com/LiGoldragon/protos", rev = "171b21f65337983ab624b7b906397a4f1f92c5a3" }
 jiff                    = { version = "0.2", features = ["tzdb-bundle-always"] }
 time                    = { version = "0.3", features = ["parsing"] }
+blake3                  = "1"
 tungstenite             = { version = "0.28", default-features = false, features = ["handshake"] }
 ureq                    = { version = "3", default-features = false, features = ["rustls"] }
 signal-persona          = { git = "https://github.com/LiGoldragon/signal-persona.git", rev = "5ed07a66d473f4fff7b293102023fc26588a3d94", features = ["datom"] }

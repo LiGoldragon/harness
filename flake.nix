@@ -151,6 +151,9 @@
           flow-id-claude = context.cargoTest "flow_id" "claude_v5_claims_are_idempotent_private_and_separate_from_same_prefix_v4_claims";
           flow-id-claude-validation = context.cargoTest "flow_id" "claude_rejects_noncanonical_unsupported_version_and_invalid_variant_parent_sessions_without_claiming_a_lane";
           flow-id-claude-exhaustion = context.cargoTest "flow_id" "claude_fails_closed_when_every_eligible_literal_hex_candidate_is_occupied";
+          flow-id-opencode = context.cargoTest "flow_id" "opencode_claims_the_first_six_hex_of_its_derived_session_identity_idempotently";
+          flow-id-opencode-validation = context.cargoTest "flow_id" "opencode_rejects_malformed_parent_sessions_without_claiming_a_lane";
+          flow-id-opencode-marker-derivation = context.cargoTest "flow_id" "opencode_marker_whose_session_does_not_derive_its_identity_fails_closed";
           flow-id-publication-race = context.cargoLibTest "flow_id::tests::claude_first_creator_publishes_complete_marker_only_after_the_stable_claim_lock";
           usage-claude-named-windows-and-listed-limits = context.cargoTest "usage_documents" "claude_named_windows_and_listed_limits_are_each_enumerated";
           usage-no-duration-inferred-from-reset = context.cargoTest "usage_documents" "a_listed_limit_keeps_its_reset_and_rate_without_an_inferred_duration";

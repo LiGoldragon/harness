@@ -10,6 +10,10 @@ use std::{
 const MARKER_VERSION: &str = "1";
 const FIRST_CANDIDATE_LENGTH: usize = 6;
 const CODEX_CANDIDATE_START: usize = 23;
+const OPENCODE_SESSION_PREFIX: &str = "ses_";
+const OPENCODE_SESSION_TIME_LENGTH: usize = 12;
+const OPENCODE_SESSION_RANDOM_LENGTH: usize = 14;
+const OPENCODE_IDENTITY_CONTEXT: &str = "harness flow-id 2026-10-04 opencode session identity";
 const FLOW_DIRECTORY_MODE: u32 = 0o700;
 const MARKER_MODE: u32 = 0o600;
 static TEMP_MARKER_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -18,6 +22,7 @@ static TEMP_MARKER_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 pub enum HarnessKind {
     Codex,
     Claude,
+    OpenCode,
 }
 
 impl HarnessKind {
@@ -25,8 +30,9 @@ impl HarnessKind {
         match value {
             "codex" => Ok(Self::Codex),
             "claude" => Ok(Self::Claude),
+            "opencode" => Ok(Self::OpenCode),
             _ => Err(Error::Argument(
-                "harness must be `codex` or `claude`".into(),
+                "harness must be `codex`, `claude`, or `opencode`".into(),
             )),
         }
     }
@@ -35,7 +41,52 @@ impl HarnessKind {
         match self {
             Self::Codex => "codex",
             Self::Claude => "claude",
+            Self::OpenCode => "opencode",
         }
+    }
+}
+
+/// One OpenCode session id, as OpenCode mints it and Herdr's OpenCode plugin
+/// reports it: `ses_`, twelve lowercase hex characters of descending time, and
+/// fourteen base62 random characters.
+///
+/// The time half is not random and the random half is not hex, so no literal
+/// slice of the id is a fair hex alias. The flow identity is instead the first
+/// sixteen bytes of a BLAKE3 key derived from the whole id, and the marker
+/// keeps the id itself so the derivation can be checked.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OpenCodeSession(String);
+
+impl OpenCodeSession {
+    pub fn parse(value: &str) -> Result<Self> {
+        let body = value.strip_prefix(OPENCODE_SESSION_PREFIX);
+        let well_formed = body.is_some_and(|body| {
+            body.len() == OPENCODE_SESSION_TIME_LENGTH + OPENCODE_SESSION_RANDOM_LENGTH
+                && body.bytes().enumerate().all(|(index, byte)| {
+                    if index < OPENCODE_SESSION_TIME_LENGTH {
+                        byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()
+                    } else {
+                        byte.is_ascii_alphanumeric()
+                    }
+                })
+        });
+        if !well_formed {
+            return Err(Error::Argument(
+                "OpenCode parent session must be one `ses_` id: twelve lowercase hex then fourteen base62 characters".into(),
+            ));
+        }
+        Ok(Self(value.into()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn identity(&self) -> String {
+        blake3::derive_key(OPENCODE_IDENTITY_CONTEXT, self.0.as_bytes())[..16]
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
     }
 }
 
@@ -78,10 +129,36 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct Marker {
-    harness: HarnessKind,
     identity: String,
     alias: String,
-    claude_uuid_version: Option<ClaudeUuidVersion>,
+    origin: MarkerOrigin,
+}
+
+/// What a marker records beyond its identity: the Claude UUID version, or the
+/// OpenCode session the identity was derived from. Codex records nothing.
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum MarkerOrigin {
+    Codex,
+    Claude(ClaudeUuidVersion),
+    OpenCode(OpenCodeSession),
+}
+
+impl MarkerOrigin {
+    fn harness(&self) -> HarnessKind {
+        match self {
+            Self::Codex => HarnessKind::Codex,
+            Self::Claude(_) => HarnessKind::Claude,
+            Self::OpenCode(_) => HarnessKind::OpenCode,
+        }
+    }
+
+    fn marker_line(&self) -> Option<String> {
+        match self {
+            Self::Codex => None,
+            Self::Claude(version) => Some(format!("uuid-version={}\n", version.marker_value())),
+            Self::OpenCode(session) => Some(format!("session={}\n", session.as_str())),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -113,31 +190,21 @@ impl ClaudeUuidVersion {
 }
 
 impl Marker {
-    fn new(
-        harness: HarnessKind,
-        identity: &str,
-        alias: &str,
-        claude_uuid_version: Option<ClaudeUuidVersion>,
-    ) -> Self {
+    fn new(identity: &str, alias: &str, origin: MarkerOrigin) -> Self {
         Self {
-            harness,
             identity: identity.into(),
             alias: alias.into(),
-            claude_uuid_version,
+            origin,
         }
     }
 
     fn encode(&self) -> String {
-        let uuid_version = self
-            .claude_uuid_version
-            .map(|version| format!("uuid-version={}\n", version.marker_value()))
-            .unwrap_or_default();
         format!(
             "version={MARKER_VERSION}\nharness={}\nidentity={}\nalias={}\n",
-            self.harness.name(),
+            self.origin.harness().name(),
             self.identity,
             self.alias,
-        ) + &uuid_version
+        ) + &self.origin.marker_line().unwrap_or_default()
     }
 
     fn decode(path: &Path, text: &str) -> Result<Self> {
@@ -146,7 +213,7 @@ impl Marker {
         let harness = lines.next();
         let identity = lines.next();
         let alias = lines.next();
-        let uuid_version = lines.next();
+        let origin_line = lines.next();
         if lines.next().is_some()
             || version != Some("version=1")
             || !identity.is_some_and(|line| line.starts_with("identity="))
@@ -157,6 +224,7 @@ impl Marker {
         let harness = match harness {
             Some("harness=codex") => HarnessKind::Codex,
             Some("harness=claude") => HarnessKind::Claude,
+            Some("harness=opencode") => HarnessKind::OpenCode,
             _ => return Err(Error::MalformedMarker(path.into())),
         };
         let identity = identity.expect("validated").trim_start_matches("identity=");
@@ -170,37 +238,60 @@ impl Marker {
         if alias.is_empty() || alias.bytes().any(|byte| !byte.is_ascii_hexdigit()) {
             return Err(Error::MalformedMarker(path.into()));
         }
-        let claude_uuid_version = match (harness, uuid_version) {
-            (HarnessKind::Codex, None) => None,
+        let origin = match (harness, origin_line) {
+            (HarnessKind::Codex, None) => MarkerOrigin::Codex,
             (HarnessKind::Codex, Some(_)) => return Err(Error::MalformedMarker(path.into())),
             // Deployed Claude markers predate this field and could only have
             // been minted for v4 roots. Preserve those claims; untyped v5
             // metadata is not trusted.
             (HarnessKind::Claude, None) => {
                 match ClaudeUuidVersion::from_normalized_identity(identity) {
-                    Some(ClaudeUuidVersion::V4) => Some(ClaudeUuidVersion::V4),
+                    Some(ClaudeUuidVersion::V4) => MarkerOrigin::Claude(ClaudeUuidVersion::V4),
                     _ => return Err(Error::MalformedMarker(path.into())),
                 }
             }
-            (HarnessKind::Claude, Some("uuid-version=uuid-v4")) => Some(ClaudeUuidVersion::V4),
-            (HarnessKind::Claude, Some("uuid-version=uuid-v5")) => Some(ClaudeUuidVersion::V5),
+            (HarnessKind::Claude, Some("uuid-version=uuid-v4")) => {
+                MarkerOrigin::Claude(ClaudeUuidVersion::V4)
+            }
+            (HarnessKind::Claude, Some("uuid-version=uuid-v5")) => {
+                MarkerOrigin::Claude(ClaudeUuidVersion::V5)
+            }
             (HarnessKind::Claude, Some(_)) => return Err(Error::MalformedMarker(path.into())),
+            (HarnessKind::OpenCode, Some(line)) => line
+                .strip_prefix("session=")
+                .and_then(|session| OpenCodeSession::parse(session).ok())
+                .map(MarkerOrigin::OpenCode)
+                .ok_or_else(|| Error::MalformedMarker(path.into()))?,
+            (HarnessKind::OpenCode, None) => return Err(Error::MalformedMarker(path.into())),
         };
-        if let Some(uuid_version) = claude_uuid_version
-            && ClaudeUuidVersion::from_normalized_identity(identity) != Some(uuid_version)
-        {
+        let consistent = match &origin {
+            MarkerOrigin::Codex => true,
+            MarkerOrigin::Claude(version) => {
+                ClaudeUuidVersion::from_normalized_identity(identity) == Some(*version)
+            }
+            MarkerOrigin::OpenCode(session) => session.identity() == identity,
+        };
+        if !consistent {
             return Err(Error::MalformedMarker(path.into()));
         }
-        Ok(Self::new(harness, identity, alias, claude_uuid_version))
+        Ok(Self::new(identity, alias, origin))
     }
 }
 
 pub fn claim(harness: HarnessKind, flows_root: &Path, identity: &str) -> Result<String> {
-    let (identity, candidate_start, claude_uuid_version) = match harness {
-        HarnessKind::Codex => (normalize_uuid(identity)?, CODEX_CANDIDATE_START, None),
+    let (identity, candidate_start, origin) = match harness {
+        HarnessKind::Codex => (
+            normalize_uuid(identity)?,
+            CODEX_CANDIDATE_START,
+            MarkerOrigin::Codex,
+        ),
         HarnessKind::Claude => {
             let (identity, version) = normalize_claude_parent_uuid(identity)?;
-            (identity, 0, Some(version))
+            (identity, 0, MarkerOrigin::Claude(version))
+        }
+        HarnessKind::OpenCode => {
+            let session = OpenCodeSession::parse(identity)?;
+            (session.identity(), 0, MarkerOrigin::OpenCode(session))
         }
     };
     validate_root(flows_root)?;
@@ -210,7 +301,7 @@ pub fn claim(harness: HarnessKind, flows_root: &Path, identity: &str) -> Result<
         match inspect_lane(flows_root, alias)? {
             Lane::Legacy => continue,
             Lane::Missing | Lane::Owned => {
-                match claim_candidate(harness, flows_root, &identity, alias, claude_uuid_version)? {
+                match claim_candidate(flows_root, &identity, alias, &origin)? {
                     Candidate::Claimed => return Ok(alias.into()),
                     Candidate::Collision => continue,
                 }
@@ -308,14 +399,13 @@ enum Candidate {
 }
 
 fn claim_candidate(
-    harness: HarnessKind,
     root: &Path,
     identity: &str,
     alias: &str,
-    claude_uuid_version: Option<ClaudeUuidVersion>,
+    origin: &MarkerOrigin,
 ) -> Result<Candidate> {
     let marker_path = marker_path(root, alias);
-    let expected = Marker::new(harness, identity, alias, claude_uuid_version);
+    let expected = Marker::new(identity, alias, origin.clone());
     let lock_path = claim_lock_path(root, alias);
     let lock_file = open_claim_lock(&lock_path)?;
     lock_file.lock().map_err(|source| Error::Filesystem {

@@ -34,7 +34,9 @@ fn run(arguments: Vec<String>) -> harness::flow_id::Result<()> {
                 harness::flow_id::Error::Argument("CODEX_SESSION_ID is required for codex".into())
             })?
         }
-        HarnessKind::Claude if parent_session.is_some() => parent_session.expect("checked"),
+        HarnessKind::Claude | HarnessKind::OpenCode if parent_session.is_some() => {
+            parent_session.expect("checked")
+        }
         _ => return Err(harness::flow_id::Error::Argument(usage())),
     };
     println!("{}", claim(harness, &root, &identity)?);
@@ -42,5 +44,5 @@ fn run(arguments: Vec<String>) -> harness::flow_id::Result<()> {
 }
 
 fn usage() -> String {
-    "usage: flow-id codex --flows-root ABSOLUTE_DIRECTORY | flow-id claude --flows-root ABSOLUTE_DIRECTORY --parent-session UUID".into()
+    "usage: flow-id codex --flows-root ABSOLUTE_DIRECTORY | flow-id claude --flows-root ABSOLUTE_DIRECTORY --parent-session UUID | flow-id opencode --flows-root ABSOLUTE_DIRECTORY --parent-session ses_ID".into()
 }

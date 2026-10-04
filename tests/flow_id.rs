@@ -12,6 +12,11 @@ use tempfile::TempDir;
 const CODEX_SESSION: &str = "01a05e95-1234-5678-9abc-000715d46abc";
 const CLAUDE_SESSION: &str = "a1b2c3d4-e5f6-4a78-9abc-def012345678";
 const CLAUDE_V5_SESSION: &str = "a1b2c3e4-e5f6-5a78-9abc-def012345678";
+const OPENCODE_SESSION: &str = "ses_efb87fbf8ffeNiz8sYspte4ulU";
+// `b3sum --derive-key "harness flow-id 2026-10-04 opencode session identity"`
+// over OPENCODE_SESSION, first 32 hex characters: an oracle outside this crate.
+const OPENCODE_IDENTITY: &str = "97a5caaa49ea3f635384a5ef2dce2dd1";
+const OPENCODE_FIRST_ALIAS: &str = "97a5ca";
 const FIRST_ALIAS: &str = "715d46";
 const CLAUDE_FIRST_ALIAS: &str = "a1b2c3";
 
@@ -42,6 +47,17 @@ fn claude(root: &Path, parent_session: &str) -> std::process::Output {
         .arg(parent_session)
         .output()
         .expect("run flow-id claude")
+}
+
+fn opencode(root: &Path, parent_session: &str) -> std::process::Output {
+    flow_id()
+        .arg("opencode")
+        .arg("--flows-root")
+        .arg(root)
+        .arg("--parent-session")
+        .arg(parent_session)
+        .output()
+        .expect("run flow-id opencode")
 }
 
 fn success_alias(output: std::process::Output) -> String {
@@ -513,5 +529,125 @@ fn child_is_not_a_helper_mode_and_cannot_create_a_child_lane() {
             .expect("empty root")
             .next()
             .is_none()
+    );
+}
+
+#[test]
+fn opencode_claims_the_first_six_hex_of_its_derived_session_identity_idempotently() {
+    let root = flows_root();
+    assert_eq!(
+        success_alias(opencode(root.path(), OPENCODE_SESSION)),
+        format!("{OPENCODE_FIRST_ALIAS}\n")
+    );
+    assert_eq!(
+        success_alias(opencode(root.path(), OPENCODE_SESSION)),
+        format!("{OPENCODE_FIRST_ALIAS}\n")
+    );
+    assert_eq!(
+        fs::read_to_string(marker(root.path(), OPENCODE_FIRST_ALIAS)).expect("OpenCode marker"),
+        format!(
+            "version=1\nharness=opencode\nidentity={OPENCODE_IDENTITY}\nalias={OPENCODE_FIRST_ALIAS}\nsession={OPENCODE_SESSION}\n"
+        )
+    );
+    for (path, mode) in [
+        (marker(root.path(), OPENCODE_FIRST_ALIAS), 0o600),
+        (claim_lock(root.path(), OPENCODE_FIRST_ALIAS), 0o600),
+        (root.path().join(OPENCODE_FIRST_ALIAS), 0o700),
+    ] {
+        assert_eq!(
+            fs::metadata(&path)
+                .expect("claim path")
+                .permissions()
+                .mode()
+                & 0o777,
+            mode,
+            "{}",
+            path.display()
+        );
+    }
+    assert_eq!(fs::read_dir(root.path()).expect("read claims").count(), 3);
+}
+
+#[test]
+fn opencode_sessions_differing_only_in_their_random_half_claim_different_lanes() {
+    let root = flows_root();
+    let sibling = "ses_efb87fbf8ffeNiz8sYspte4ulV";
+    let first = success_alias(opencode(root.path(), OPENCODE_SESSION));
+    let second = success_alias(opencode(root.path(), sibling));
+    assert_ne!(first, second);
+    assert!(root.path().join(first.trim()).is_dir());
+    assert!(root.path().join(second.trim()).is_dir());
+}
+
+#[test]
+fn opencode_rejects_malformed_parent_sessions_without_claiming_a_lane() {
+    let root = flows_root();
+    for parent_session in [
+        "efb87fbf8ffeNiz8sYspte4ulU",
+        "ses-efb87fbf8ffeNiz8sYspte4ulU",
+        "ses_EFB87FBF8FFENiz8sYspte4ulU",
+        "ses_efb87fbf8ffgNiz8sYspte4ulU",
+        "ses_efb87fbf8ffeNiz8sYspte4ul",
+        "ses_efb87fbf8ffeNiz8sYspte4ulUx",
+        "ses_efb87fbf8ffeNiz8sYspte4u-U",
+        "ses_",
+        CLAUDE_SESSION,
+    ] {
+        let output = opencode(root.path(), parent_session);
+        assert!(
+            !output.status.success(),
+            "invalid OpenCode parent session unexpectedly succeeded: {parent_session}"
+        );
+        assert!(output.stdout.is_empty());
+    }
+    let without_session = flow_id()
+        .arg("opencode")
+        .arg("--flows-root")
+        .arg(root.path())
+        .env("CODEX_SESSION_ID", CODEX_SESSION)
+        .output()
+        .expect("run flow-id opencode without a parent session");
+    assert!(!without_session.status.success());
+    assert!(
+        fs::read_dir(root.path())
+            .expect("empty root")
+            .next()
+            .is_none()
+    );
+}
+
+#[test]
+fn opencode_marker_whose_session_does_not_derive_its_identity_fails_closed() {
+    let root = flows_root();
+    let path = marker(root.path(), OPENCODE_FIRST_ALIAS);
+    fs::write(
+        &path,
+        format!(
+            "version=1\nharness=opencode\nidentity={OPENCODE_IDENTITY}\nalias={OPENCODE_FIRST_ALIAS}\nsession=ses_efb87fbf8ffeNiz8sYspte4ulV\n"
+        ),
+    )
+    .expect("tampered marker");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("private marker");
+    let output = opencode(root.path(), OPENCODE_SESSION);
+    assert!(!output.status.success());
+    assert!(!root.path().join(OPENCODE_FIRST_ALIAS).exists());
+}
+
+#[test]
+fn opencode_does_not_adopt_a_claude_marker_with_the_same_alias() {
+    let root = flows_root();
+    let claude_session = "97a5caa4-e5f6-4a78-9abc-def012345678";
+    assert_eq!(
+        success_alias(claude(root.path(), claude_session)),
+        format!("{OPENCODE_FIRST_ALIAS}\n")
+    );
+    assert_eq!(
+        success_alias(opencode(root.path(), OPENCODE_SESSION)),
+        "97a5caa\n"
+    );
+    assert!(
+        fs::read_to_string(marker(root.path(), "97a5caa"))
+            .expect("OpenCode marker")
+            .contains("harness=opencode\n")
     );
 }

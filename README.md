@@ -6,7 +6,12 @@ claude --flows-root ABSOLUTE_DIRECTORY --parent-session UUID` when Claude's
 authoritative parent identity is known. Codex normalizes its UUID and claims
 from `[23:29]` onward. Claude accepts only a canonical lowercase RFC 4122
 UUIDv4 or UUIDv5 parent session (with variant nibble `8`, `9`, `a`, or `b`) and claims
-its first six literal hexadecimal characters.
+its first six literal hexadecimal characters. `flow-id opencode --flows-root
+ABSOLUTE_DIRECTORY --parent-session ses_ID` takes the OpenCode session Herdr's
+OpenCode plugin reports (`ses_`, twelve lowercase hex, fourteen base62); its
+identity is the first 32 hex characters of `BLAKE3 derive_key("harness
+flow-id 2026-10-04 opencode session identity", session)`, claimed from its
+first six, and its marker records `session=ses_ID`.
 Both extend the candidate by the following eligible hexadecimal character only
 when a lane collides. It prints only the claimed hex alias. The parent passes
 that alias as `FLOW_ID` and `flows-root/FLOW_ID` as `FLOW_DIRECTORY`; child

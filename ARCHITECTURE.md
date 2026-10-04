@@ -77,8 +77,14 @@ flowchart LR
   Codex claims normalized UUID characters `[23:29]`, while Claude claims the
   first six literal hexadecimal characters of a canonical lowercase UUIDv4 or
   UUIDv5 parent session with RFC 4122 variant. Claude markers retain that UUID
-  version, while deployed untyped v4 markers stay compatible. Both use a stable
-  private lock and complete-or-absent marker publication;
+  version, while deployed untyped v4 markers stay compatible. OpenCode takes
+  its `ses_` parent session (twelve lowercase hex of descending time, fourteen
+  base62 random characters, as Herdr's OpenCode plugin reports it); no literal
+  slice of it is a fair hex alias, so its identity is the first sixteen bytes
+  of a BLAKE3 key derived from the whole id, claimed from its first six hex
+  characters, and its marker keeps the session so the derivation is checked
+  on every read. All use a stable private lock and complete-or-absent marker
+  publication;
 - harness identity records;
 - lifecycle state;
 - transcript events;
@@ -370,7 +376,7 @@ src/main.rs               ordinary signal-harness CLI
 src/bin/meta_harness.rs   meta-signal-harness CLI
 src/bin/harness_daemon.rs managed daemon entrypoint
 src/bin/flow_id.rs        parent-flow identity claim CLI
-src/flow_id.rs            harness-specific UUID validation and atomic lane claim protocol
+src/flow_id.rs            harness-specific UUID and OpenCode session validation and atomic lane claim protocol
 src/client.rs             ordinary CLI client transport
 src/meta.rs               meta CLI client transport
 src/configuration.rs      BindingSurface over HarnessDaemonConfiguration
@@ -410,6 +416,9 @@ tests/                    harness smoke, daemon, CLI, and actor-runtime tests
 | A Claude parent claims the first six literal hex characters of its UUIDv4 or UUIDv5 parent session. | `nix flake check .#flow-id-claude` |
 | Claude rejects noncanonical, unsupported-version, and invalid-variant parent sessions before claiming a lane. | `nix flake check .#flow-id-claude-validation` |
 | Claude fails closed after every eligible literal candidate is occupied. | `nix flake check .#flow-id-claude-exhaustion` |
+| An OpenCode parent claims the first six hex characters of the BLAKE3 identity derived from its `ses_` session, idempotently and privately. | `nix flake check .#flow-id-opencode` |
+| OpenCode rejects a malformed or missing `ses_` parent session before claiming a lane. | `nix flake check .#flow-id-opencode-validation` |
+| An OpenCode marker whose session does not derive its identity fails closed. | `nix flake check .#flow-id-opencode-marker-derivation` |
 | A Claude first creator never exposes a partial marker to a concurrent claimant. | `nix flake check .#flow-id-publication-race` |
 | Harness identity projection cannot collapse back to one always-full record. | `nix flake check .#harness-identity-projection-source-constraint` |
 | Fixture-only human terminal endpoints cannot claim production delivery. | `nix flake check .#terminal-fixture-endpoint-not-production-delivery` |
